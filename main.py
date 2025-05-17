@@ -1,4 +1,5 @@
 import os
+import logging
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
@@ -6,6 +7,12 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     filters
+)
+
+# Настройка логирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
 
 # Константы
@@ -58,6 +65,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработчик выбора комнаты
 async def choose_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    logging.info(f"Пользователь выбрал: {text}")
+
     room_number = text[-1]
     context.user_data['room'] = room_number
 
@@ -75,6 +84,8 @@ async def choose_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработчик выбора типа еды
 async def choose_meal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    logging.info(f"Пользователь выбрал: {text}")
+
     meal_type = text.strip().lower()
     context.user_data['meal_type'] = meal_type
 
@@ -86,6 +97,8 @@ async def choose_meal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработчик выбора блюда
 async def choose_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    logging.info(f"Пользователь выбрал: {text}")
+
     meal_type = context.user_data['meal_type']
     food_choice = next(k for k, v in FOOD_MENU[meal_type].items() if k == text)
     context.user_data['food_choice'] = food_choice
@@ -98,6 +111,8 @@ async def choose_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработчик выбора времени
 async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    logging.info(f"Пользователь выбрал: {text}")
+
     time_choice = text.strip()
 
     # Сообщение клиенту
@@ -122,9 +137,9 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex(r'^(Комната 1|Комната 2)$'), choose_room))
-    app.add_handler(MessageHandler(filters.Regex(r'^(Завтрак|Ужин)$'), choose_meal_type))
-    app.add_handler(MessageHandler(filters.Regex(r'^(Яичница|Блины|Чай|Суп 1|Суп 2|Пюре с мясом)$'), choose_food))
+    app.add_handler(MessageHandler(filters.Regex(r'^🛏️ Комната [12]$'), choose_room))
+    app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
+    app.add_handler(MessageHandler(filters.Regex(r'^🥞 Яичница$|^🧇 Блины$|^🍵 Чай$|^🍲 Суп 1$|^🍲 Суп 2$|^🍖 Пюре с мясом$'), choose_food))
     app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
 
     app.run_polling()
