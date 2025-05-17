@@ -2,7 +2,6 @@ import os
 import logging
 import asyncio
 import aiohttp
-import threading
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
@@ -11,8 +10,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from flask import Flask
-from waitress import serve
 
 # Настройка логирования
 logging.basicConfig(
@@ -56,12 +53,6 @@ PHOTO_PATHS = {
     "museum": "photos/museum_carpathian_front.jpg",
     "souvenir": "photos/souvenir_magnet.jpg"
 }
-
-app = Flask(__name__)
-
-@app.route("/ping")
-def ping():
-    return "OK", 200
 
 # ================= ОБРАБОТЧИКИ КОМАНД =================
 
@@ -260,14 +251,11 @@ async def self_ping():
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{RENDER_URL}/ping") as response:
+                async with session.get(RENDER_URL) as response:
                     logger.info(f"Self-ping: Status {response.status}")
         except Exception as e:
             logger.error(f"Self-ping error: {str(e)}")
         await asyncio.sleep(300)
-
-def run_flask():
-    serve(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
 
 async def main():
     application = ApplicationBuilder().token(TOKEN).build()
@@ -288,10 +276,8 @@ async def main():
     WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
     await application.bot.set_webhook(WEBHOOK_URL)
 
-    # Запуск задач
+    # Запуск self-ping
     asyncio.create_task(self_ping())
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
 
     # Запуск бота
     await application.run_webhook(
