@@ -2,13 +2,16 @@ import os
 import logging
 import threading
 import requests
+import asyncio
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
+    Application,
+    PicklePersistence
 )
 
 # Настройка логирования
@@ -275,7 +278,7 @@ def self_ping():
         threading.Event().wait(300)
 
 # Основной запуск
-def main():
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -293,7 +296,15 @@ def main():
     ping_thread = threading.Thread(target=self_ping)
     ping_thread.start()
 
-    app.run_polling()
+    # Настройка вебхука
+    PORT = int(os.getenv("PORT", 8000))
+    URL = f"{RENDER_URL}/{TOKEN}"
+
+    # Установка вебхука
+    await app.bot.set_webhook(url=URL)
+
+    # Запуск вебхука
+    await app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN)
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
