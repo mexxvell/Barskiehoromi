@@ -41,8 +41,8 @@ FOOD_MENU = {
 # Словарь для хранения фотографий
 PHOTO_PATHS = {
     'main': 'photos/main_photo.jpg',
-    'room1': 'photos/room1.jpg',
-    'room2': 'photos/room2.jpg'
+    'room1': 'photos/room1.jpeg',
+    'room2': 'photos/room2.jpeg'
 }
 
 # Стартовая команда
