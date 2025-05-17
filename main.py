@@ -50,7 +50,7 @@ PHOTO_PATHS = {
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_keyboard = ReplyKeyboardMarkup(
         [
-            ["🏛️ Музей", "🛏️ Комната 1"],
+            ["🏛️ Достопримечательности", "🛏️ Комната 1"],
             ["🛏️ Комната 2", "🛍️ Сувенир"]
         ],
         resize_keyboard=True
@@ -123,7 +123,17 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await context.bot.send_message(chat_id=OWNER_ID, text=message)
 
-# Обработчик музея
+# Обработчик "Достопримечательности"
+async def handle_attractions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    attractions_keyboard = ReplyKeyboardMarkup(
+        [
+            ["🏛️ Музей Карельского фронта"]
+        ],
+        resize_keyboard=True
+    )
+    await update.message.reply_text("🏛️ Выберите достопримечательность:", reply_markup=attractions_keyboard)
+
+# Обработчик "Музей Карельского фронта"
 async def handle_museum(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(PHOTO_PATHS['museum'], 'rb') as photo:
         await update.message.reply_photo(
@@ -131,7 +141,7 @@ async def handle_museum(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="🏛️ Музей Карельского фронта\n📍 Адрес: г. Беломорск, ул. Банковская, д. 26"
         )
     await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
-        [["🏛️ Музей", "🛏️ Комната 1"], ["🛏️ Комната 2", "🛍️ Сувенир"]],
+        [["🏛️ Достопримечательности", "🛏️ Комната 1"], ["🛏️ Комната 2", "🛍️ Сувенир"]],
         resize_keyboard=True
     ))
 
@@ -143,7 +153,7 @@ async def handle_souvenir(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="🛍️ Магнит на холодильник"
         )
     await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
-        [["🏛️ Музей", "🛏️ Комната 1"], ["🛏️ Комната 2", "🛍️ Сувенир"]],
+        [["🏛️ Достопримечательности", "🛏️ Комната 1"], ["🛏️ Комната 2", "🛍️ Сувенир"]],
         resize_keyboard=True
     ))
 
@@ -152,7 +162,8 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей$'), handle_museum))
+    app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
+    app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
     app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenir))
     app.add_handler(MessageHandler(filters.Regex(r'^🛏️ Комната [12]$'), choose_room))
     app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
