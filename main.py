@@ -294,11 +294,23 @@ async def main():
     ping_thread.start()
 
     # Установка вебхука
-    PORT = int(os.getenv("PORT", 8000))
-    WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
+    PORT = int(os.getenv("PORT", 10000))  # Используем порт по умолчанию
+    WEBHOOK_URL = f"{RENDER_URL}:{PORT}/{TOKEN}"
 
-    logging.info(f"Настройка вебхука на URL: {WEBHOOK_URL}")
-    await app.bot.set_webhook(url=WEBHOOK_URL)
+    try:
+        # Удаление старого вебхука
+        await app.bot.delete_webhook()
+        logging.info("Старый вебхук удален")
+    except Exception as e:
+        logging.warning(f"Ошибка при удалении вебхука: {e}")
+
+    try:
+        # Установка нового вебхука
+        logging.info(f"Настройка вебхука на URL: {WEBHOOK_URL}")
+        await app.bot.set_webhook(url=WEBHOOK_URL)
+    except Exception as e:
+        logging.error(f"Ошибка установки вебхука: {e}")
+        return
 
     # Запуск вебхука
     await app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN)
