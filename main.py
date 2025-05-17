@@ -1,5 +1,7 @@
 import os
 import logging
+import threading
+import requests
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
@@ -18,6 +20,7 @@ logging.basicConfig(
 # Константы
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
+RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
 
 # Словари
 TIME_SLOTS = {
@@ -62,19 +65,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="👋 Добро пожаловать в наш дом! 🏡\nВыберите нужный раздел:",
             reply_markup=main_keyboard
         )
+    context.user_data['current_menu'] = 'main'
 
 # Обработчик выбора комнаты
 async def choose_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     room_number = text[-1]
     context.user_data['room'] = room_number
+    context.user_data['current_menu'] = 'meal'
 
     with open(PHOTO_PATHS[f'room{room_number}'], 'rb') as photo:
         await update.message.reply_photo(photo=photo)
 
     meal_keyboard = ReplyKeyboardMarkup(
         [
-            ["🍳 Завтрак", "🍽️ Ужин"]
+            ["🍳 Завтрак", "🍽️ Ужин"],
+            ["🔙 Назад"]
         ],
         resize_keyboard=True
     )
@@ -83,29 +89,45 @@ async def choose_room(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Обработчик выбора типа еды
 async def choose_meal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    if text == "🔙 Назад":
+        await go_back(update, context)
+        return
+
     meal_type = text.strip().lower()
     context.user_data['meal_type'] = meal_type
+    context.user_data['current_menu'] = 'food'
 
     menu = FOOD_MENU[meal_type]
     buttons = [[key] for key in menu.keys()]
+    buttons.append(["🔙 Назад"])
     keyboard = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
     await update.message.reply_text("Выберите блюдо:", reply_markup=keyboard)
 
 # Обработчик выбора блюда
 async def choose_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    if text == "🔙 Назад":
+        await go_back(update, context)
+        return
+
     meal_type = context.user_data['meal_type']
     food_choice = next(k for k, v in FOOD_MENU[meal_type].items() if k == text)
     context.user_data['food_choice'] = food_choice
+    context.user_data['current_menu'] = 'time'
 
     time_slots = TIME_SLOTS[meal_type]
     buttons = [[slot] for slot in time_slots]
+    buttons.append(["🔙 Назад"])
     keyboard = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
     await update.message.reply_text("Выберите удобное время:", reply_markup=keyboard)
 
 # Обработчик выбора времени
 async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    if text == "🔙 Назад":
+        await go_back(update, context)
+        return
+
     time_choice = text.strip()
 
     await update.message.reply_text("✅ Ваш заказ отправлен хозяевам дома!", reply_markup=ReplyKeyboardRemove())
@@ -125,9 +147,11 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Обработчик "Достопримечательности"
 async def handle_attractions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['current_menu'] = 'attractions'
     attractions_keyboard = ReplyKeyboardMarkup(
         [
-            ["🏛️ Музей Карельского фронта"]
+            ["🏛️ Музей Карельского фронта"],
+            ["🔙 Назад"]
         ],
         resize_keyboard=True
     )
@@ -157,6 +181,61 @@ async def handle_souvenir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resize_keyboard=True
     ))
 
+# Обработчик кнопки "Назад"
+async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    current_menu = context.user_data.get('current_menu', 'main')
+    if current_menu == 'main':
+        return
+
+    if current_menu == 'meal':
+        main_keyboard = ReplyKeyboardMarkup(
+            [
+                ["🏛️ Достопримечательности", "🛏️ Комната 1"],
+                ["🛏️ Комната 2", "🛍️ Сувенир"]
+            ],
+            resize_keyboard=True
+        )
+        await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
+    elif current_menu == 'attractions':
+        main_keyboard = ReplyKeyboardMarkup(
+            [
+                ["🏛️ Достопримечательности", "🛏️ Комната 1"],
+                ["🛏️ Комната 2", "🛍️ Сувенир"]
+            ],
+            resize_keyboard=True
+        )
+        await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
+    elif current_menu == 'food':
+        meal_keyboard = ReplyKeyboardMarkup(
+            [
+                ["🍳 Завтрак", "🍽️ Ужин"],
+                ["🔙 Назад"]
+            ],
+            resize_keyboard=True
+        )
+        await update.message.reply_text("Выберите, что бы вы хотели:", reply_markup=meal_keyboard)
+    elif current_menu == 'time':
+        food_keyboard = ReplyKeyboardMarkup(
+            [
+                [next(k for k, v in FOOD_MENU[context.user_data['meal_type']].items() if v == context.user_data['food_choice'])],
+                ["🔙 Назад"]
+            ],
+            resize_keyboard=True
+        )
+        await update.message.reply_text("Выберите блюдо:", reply_markup=food_keyboard)
+
+    context.user_data['current_menu'] = 'main'
+
+# Автопинг каждые 5 минут
+def self_ping():
+    while True:
+        try:
+            response = requests.get(RENDER_URL)
+            logging.info(f"Self-ping успешен: {response.status_code}")
+        except Exception as e:
+            logging.error(f"Ошибка self-ping: {str(e)}")
+        threading.Event().wait(300)
+
 # Основной запуск
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
@@ -169,6 +248,11 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
     app.add_handler(MessageHandler(filters.Regex(r'^ pancakes|omelette|tea|soup1|soup2|meat_puree$'), choose_food))
     app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
+    app.add_handler(MessageHandler(filters.Regex(r'^🔙 Назад$'), go_back))
+
+    # Запуск автопинга в отдельном потоке
+    ping_thread = threading.Thread(target=self_ping)
+    ping_thread.start()
 
     app.run_polling()
 
