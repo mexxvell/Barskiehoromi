@@ -93,7 +93,17 @@ async def choose_meal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await go_back(update, context)
         return
 
-    meal_type = text.strip().lower()
+    # Маппинг кнопок к типам еды
+    meal_type_map = {
+        "🍳 Завтрак": "breakfast",
+        "🍽️ Ужин": "dinner"
+    }
+
+    meal_type = meal_type_map.get(text)
+    if not meal_type:
+        await update.message.reply_text("Неизвестный выбор. Попробуйте ещё раз.")
+        return
+
     context.user_data['meal_type'] = meal_type
     context.user_data['current_menu'] = 'food'
 
@@ -169,12 +179,24 @@ async def handle_museum(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resize_keyboard=True
     ))
 
-# Обработчик сувенира
-async def handle_souvenir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Обработчик "Сувениры"
+async def handle_souvenirs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['current_menu'] = 'souvenirs'
+    souvenir_keyboard = ReplyKeyboardMarkup(
+        [
+            ["🧲 Магнит на холодильник"],
+            ["🔙 Назад"]
+        ],
+        resize_keyboard=True
+    )
+    await update.message.reply_text("🛍️ Выберите сувенир:", reply_markup=souvenir_keyboard)
+
+# Обработчик "Магнит на холодильник"
+async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(PHOTO_PATHS['souvenir'], 'rb') as photo:
         await update.message.reply_photo(
             photo=photo,
-            caption="🛍️ Магнит на холодильник"
+            caption="🧲 Магнит на холодильник"
         )
     await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
         [["🏛️ Достопримечательности", "🛏️ Комната 1"], ["🛏️ Комната 2", "🛍️ Сувенир"]],
@@ -223,14 +245,30 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resize_keyboard=True
         )
         await update.message.reply_text("Выберите блюдо:", reply_markup=food_keyboard)
+    elif current_menu == 'souvenirs':
+        main_keyboard = ReplyKeyboardMarkup(
+            [
+                ["🏛️ Достопримечательности", "🛏️ Комната 1"],
+                ["🛏️ Комната 2", "🛍️ Сувенир"]
+            ],
+            resize_keyboard=True
+        )
+        await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
 
     context.user_data['current_menu'] = 'main'
 
 # Автопинг каждые 5 минут
 def self_ping():
     while True:
+        url = os.getenv('RENDER_URL')
+        if not url:
+            logging.error("RENDER_URL не задан")
+            threading.Event().wait(300)
+            continue
+
         try:
-            response = requests.get(RENDER_URL)
+            clean_url = url.replace('%20', '')
+            response = requests.get(clean_url)
             logging.info(f"Self-ping успешен: {response.status_code}")
         except Exception as e:
             logging.error(f"Ошибка self-ping: {str(e)}")
@@ -243,7 +281,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
-    app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenir))
+    app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenirs))
+    app.add_handler(MessageHandler(filters.Regex(r'^🧲 Магнит на холодильник$'), handle_magnet))
     app.add_handler(MessageHandler(filters.Regex(r'^🛏️ Комната [12]$'), choose_room))
     app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
     app.add_handler(MessageHandler(filters.Regex(r'^ pancakes|omelette|tea|soup1|soup2|meat_puree$'), choose_food))
