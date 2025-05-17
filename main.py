@@ -23,6 +23,10 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
 RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com')
 
+# Проверка переменных окружения
+if not all([TOKEN, OWNER_ID, RENDER_URL]):
+    raise EnvironmentError("Не заданы обязательные переменные окружения!")
+
 # Словари
 TIME_SLOTS = {
     'breakfast': ['08:00', '09:00', '10:00'],
@@ -31,14 +35,14 @@ TIME_SLOTS = {
 
 FOOD_MENU = {
     'breakfast': {
-        '🥞 Яичница (150 гр) - 300р': 'omelette',
-        '🧇 Блины (200 гр) - 250р': 'pancakes',
-        '🍵 Чай (250 мл) - 100р': 'tea'
+        '🥞 Яичница': 'omelette',
+        '🧇 Блины': 'pancakes',
+        '🍵 Чай': 'tea'
     },
     'dinner': {
-        '🍲 Борщ (250 гр) - 500р': 'soup1',
-        '🍲 Солянка (300 гр) - 600р': 'soup2',
-        '🍖 Пюре с мясом (200 гр) - 400р': 'meat_puree'
+        '🍲 Суп 1': 'soup1',
+        '🍲 Суп 2': 'soup2',
+        '🍖 Пюре с мясом': 'meat_puree'
     }
 }
 
@@ -54,8 +58,8 @@ PHOTO_PATHS = {
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_keyboard = ReplyKeyboardMarkup(
         [
-            ["🏛️ Достопримечательности", "床位 1"],
-            ["床位 2", "🛍️ Сувенир"]
+            ["🏛️ Достопримечательности", "🛏️ Комната 1"],
+            ["🛏️ Комната 2", "🛍️ Сувенир"]
         ],
         resize_keyboard=True
     )
@@ -141,18 +145,21 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("✅ Ваш заказ отправлен хозяевам дома!", reply_markup=ReplyKeyboardRemove())
 
-    room = context.user_data['room']
-    meal_type = context.user_data['meal_type']
-    food = next(k for k, v in FOOD_MENU[meal_type].items() if v == context.user_data['food_choice'])
-
-    message = (
-        f"🛎️ Новый заказ!\n"
-        f"🛏️ Комната: {room}\n"
-        f"🍽️ Тип: {meal_type.capitalize()}\n"
-        f"🍲 Блюдо: {food}\n"
-        f"⏰ Время: {time_choice}"
-    )
-    await context.bot.send_message(chat_id=OWNER_ID, text=message)
+    try:
+        room = context.user_data['room']
+        meal_type = context.user_data['meal_type']
+        food = next(k for k, v in FOOD_MENU[meal_type].items() if v == context.user_data['food_choice'])
+        message = (
+            f"🛎️ Новый заказ!\n"
+            f"🛏️ Комната: {room}\n"
+            f"🍽️ Тип: {meal_type.capitalize()}\n"
+            f"🍲 Блюдо: {food}\n"
+            f"⏰ Время: {time_choice}"
+        )
+        await update.effective_bot.send_message(chat_id=OWNER_ID, text=message)
+    except KeyError as e:
+        logger.error(f"Ошибка при сборе данных: {e}")
+        await update.message.reply_text("Произошла ошибка. Пожалуйста, попробуйте заново.")
 
 # Обработчик "Достопримечательности"
 async def handle_attractions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -183,7 +190,7 @@ async def handle_souvenirs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['current_menu'] = 'souvenirs'
     souvenir_keyboard = ReplyKeyboardMarkup(
         [
-            ["🧲 Магнит на холодильник (50 гр) - 100р"],
+            ["🧲 Магнит на холодильник"],
             ["🔙 Назад"]
         ],
         resize_keyboard=True
@@ -195,10 +202,10 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(PHOTO_PATHS['souvenir'], 'rb') as photo:
         await update.message.reply_photo(
             photo=photo,
-            caption="🧲 Магнит на холодильник (50 гр) - 100р"
+            caption="🧲 Магнит на холодильник"
         )
     await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
-        [["🏛️ Достопримечательности", "🛏️ Комната 1"], ["🛏️ Комната 2", "🛍️ Сувенир"]],
+        [["🏛️ Достопримечательности", "床位 1"], ["床位 2", "🛍️ Сувенир"]],
         resize_keyboard=True
     ))
 
@@ -211,8 +218,8 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if current_menu == 'meal':
         main_keyboard = ReplyKeyboardMarkup(
             [
-                ["🏛️ Достопримечательности", "🛏️ Комната 1"],
-                ["🛏️ Комната 2", "🛍️ Сувенир"]
+                ["🏛️ Достопримечательности", "床位 1"],
+                ["床位 2", "🛍️ Сувенир"]
             ],
             resize_keyboard=True
         )
@@ -220,8 +227,8 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif current_menu == 'attractions':
         main_keyboard = ReplyKeyboardMarkup(
             [
-                ["🏛️ Достопримечательности", "🛏️ Комната 1"],
-                ["🛏️ Комната 2", "🛍️ Сувенир"]
+                ["🏛️ Достопримечательности", "床位 1"],
+                ["床位 2", "🛍️ Сувенир"]
             ],
             resize_keyboard=True
         )
@@ -247,8 +254,8 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif current_menu == 'souvenirs':
         main_keyboard = ReplyKeyboardMarkup(
             [
-                ["🏛️ Достопримечательности", "🛏️ Комната 1"],
-                ["🛏️ Комната 2", "🛍️ Сувенир"]
+                ["🏛️ Достопримечательности", "床位 1"],
+                ["床位 2", "🛍️ Сувенир"]
             ],
             resize_keyboard=True
         )
@@ -261,16 +268,16 @@ def self_ping():
     while True:
         url = os.getenv('RENDER_URL')
         if not url:
-            logging.error("RENDER_URL не задан")
+            logger.error("RENDER_URL не задан")
             threading.Event().wait(300)
             continue
 
         try:
             clean_url = url.replace('%20', '')
             response = requests.get(clean_url)
-            logging.info(f"Self-ping успешен: {response.status_code}")
+            logger.info(f"Self-ping успешен: {response.status_code}")
         except Exception as e:
-            logging.error(f"Ошибка self-ping: {str(e)}")
+            logger.error(f"Ошибка self-ping: {str(e)}")
         threading.Event().wait(300)
 
 # Основной запуск
@@ -279,14 +286,14 @@ def main():
 
     # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Regex(r'^床位 [12]$'), choose_room))
+    app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
+    app.add_handler(MessageHandler(filters.Regex(r'^🥞 Яичница$|^🧇 Блины$|^🍵 Чай$|^🍲 Суп 1$|^🍲 Суп 2$|^🍖 Пюре с мясом$'), choose_food))
+    app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
     app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenirs))
     app.add_handler(MessageHandler(filters.Regex(r'^🧲 Магнит на холодильник$'), handle_magnet))
-    app.add_handler(MessageHandler(filters.Regex(r"^床位 [12]$"), choose_room))
-    app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
-    app.add_handler(MessageHandler(filters.Regex(r'^Яичница|Блины|Чай|Борщ|Солянка|Пюре с мясом'), choose_food))
-    app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
     app.add_handler(MessageHandler(filters.Regex(r'^🔙 Назад$'), go_back))
 
     # Запуск автопинга
