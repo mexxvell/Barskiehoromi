@@ -278,7 +278,7 @@ async def main():
     application.add_handler(MessageHandler(filters.Regex(r"^🔙 Назад$"), go_back))
 
     # Настройка вебхука
-    PORT = int(os.getenv("PORT", 10000))  # Порт по умолчанию на Render
+    PORT = int(os.getenv("PORT", 8443))  # Порт по умолчанию на Render
     WEBHOOK_URL = f"{RENDER_URL}:{PORT}/{TOKEN}"
 
     try:
