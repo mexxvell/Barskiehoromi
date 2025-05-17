@@ -54,8 +54,8 @@ PHOTO_PATHS = {
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_keyboard = ReplyKeyboardMarkup(
         [
-            ["🏛️ Достопримечательности", "🛏️ Комната 1"],
-            ["🛏️ Комната 2", "🛍️ Сувенир"]
+            ["🏛️ Достопримечательности", "床位 1"],
+            ["床位 2", "🛍️ Сувенир"]
         ],
         resize_keyboard=True
     )
@@ -283,7 +283,7 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
     app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenirs))
     app.add_handler(MessageHandler(filters.Regex(r'^🧲 Магнит на холодильник$'), handle_magnet))
-    app.add_handler(MessageHandler(filters.Regex(r'^床位 [12]$'), choose_room))
+    app.add_handler(MessageHandler(filters.Regex(r"^床位 [12]$"), choose_room))
     app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
     app.add_handler(MessageHandler(filters.Regex(r'^Яичница|Блины|Чай|Борщ|Солянка|Пюре с мясом'), choose_food))
     app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
