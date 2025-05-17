@@ -16,6 +16,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # Константы
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -30,14 +31,14 @@ TIME_SLOTS = {
 
 FOOD_MENU = {
     'breakfast': {
-        '🥞 Яичница': 'omelette',
-        '🧇 Блины': 'pancakes',
-        '🍵 Чай': 'tea'
+        '🥞 Яичница (150 гр) - 300р': 'omelette',
+        '🧇 Блины (200 гр) - 250р': 'pancakes',
+        '🍵 Чай (250 мл) - 100р': 'tea'
     },
     'dinner': {
-        '🍲 Суп 1': 'soup1',
-        '🍲 Суп 2': 'soup2',
-        '🍖 Пюре с мясом': 'meat_puree'
+        '🍲 Борщ (250 гр) - 500р': 'soup1',
+        '🍲 Солянка (300 гр) - 600р': 'soup2',
+        '🍖 Пюре с мясом (200 гр) - 400р': 'meat_puree'
     }
 }
 
@@ -58,7 +59,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         resize_keyboard=True
     )
-
     with open(PHOTO_PATHS['main'], 'rb') as photo:
         await update.message.reply_photo(
             photo=photo,
@@ -93,7 +93,6 @@ async def choose_meal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await go_back(update, context)
         return
 
-    # Маппинг кнопок к типам еды
     meal_type_map = {
         "🍳 Завтрак": "breakfast",
         "🍽️ Ужин": "dinner"
@@ -184,7 +183,7 @@ async def handle_souvenirs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['current_menu'] = 'souvenirs'
     souvenir_keyboard = ReplyKeyboardMarkup(
         [
-            ["🧲 Магнит на холодильник"],
+            ["🧲 Магнит на холодильник (50 гр) - 100р"],
             ["🔙 Назад"]
         ],
         resize_keyboard=True
@@ -196,7 +195,7 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(PHOTO_PATHS['souvenir'], 'rb') as photo:
         await update.message.reply_photo(
             photo=photo,
-            caption="🧲 Магнит на холодильник"
+            caption="🧲 Магнит на холодильник (50 гр) - 100р"
         )
     await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
         [["🏛️ Достопримечательности", "🛏️ Комната 1"], ["🛏️ Комната 2", "🛍️ Сувенир"]],
@@ -278,21 +277,23 @@ def self_ping():
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
     app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenirs))
     app.add_handler(MessageHandler(filters.Regex(r'^🧲 Магнит на холодильник$'), handle_magnet))
-    app.add_handler(MessageHandler(filters.Regex(r'^🛏️ Комната [12]$'), choose_room))
+    app.add_handler(MessageHandler(filters.Regex(r'^床位 [12]$'), choose_room))
     app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
-    app.add_handler(MessageHandler(filters.Regex(r'^ pancakes|omelette|tea|soup1|soup2|meat_puree$'), choose_food))
+    app.add_handler(MessageHandler(filters.Regex(r'^Яичница|Блины|Чай|Борщ|Солянка|Пюре с мясом'), choose_food))
     app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
     app.add_handler(MessageHandler(filters.Regex(r'^🔙 Назад$'), go_back))
 
-    # Запуск автопинга в отдельном потоке
+    # Запуск автопинга
     ping_thread = threading.Thread(target=self_ping)
     ping_thread.start()
 
+    # Запуск опроса
     app.run_polling()
 
 if __name__ == '__main__':
