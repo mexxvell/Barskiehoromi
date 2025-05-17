@@ -205,7 +205,7 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="🧲 Магнит на холодильник"
         )
     await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
-        [["🏛️ Достопримечательности", "床位 1"], ["床位 2", "🛍️ Сувенир"]],
+        [["🏛️ Достопримечательности", "Комната 1"], ["Комната 2", "🛍️ Сувенир"]],
         resize_keyboard=True
     ))
 
@@ -218,8 +218,8 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if current_menu == 'meal':
         main_keyboard = ReplyKeyboardMarkup(
             [
-                ["🏛️ Достопримечательности", "床位 1"],
-                ["床位 2", "🛍️ Сувенир"]
+                ["🏛️ Достопримечательности", "Комната 1"],
+                ["Комната 2", "🛍️ Сувенир"]
             ],
             resize_keyboard=True
         )
@@ -227,8 +227,8 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif current_menu == 'attractions':
         main_keyboard = ReplyKeyboardMarkup(
             [
-                ["🏛️ Достопримечательности", "床位 1"],
-                ["床位 2", "🛍️ Сувенир"]
+                ["🏛️ Достопримечательности", "Комната 1"],
+                ["Комната 2", "🛍️ Сувенир"]
             ],
             resize_keyboard=True
         )
@@ -254,8 +254,8 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif current_menu == 'souvenirs':
         main_keyboard = ReplyKeyboardMarkup(
             [
-                ["🏛️ Достопримечательности", "床位 1"],
-                ["床位 2", "🛍️ Сувенир"]
+                ["🏛️ Достопримечательности", "Комната 1"],
+                ["Комната 2", "🛍️ Сувенир"]
             ],
             resize_keyboard=True
         )
