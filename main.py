@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Константы
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")
-RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com")
+RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
 
 # Проверка переменных окружения
 if not all([TOKEN, RENDER_URL]):
@@ -55,7 +55,6 @@ PHOTO_PATHS = {
 }
 
 # ================= ОБРАБОТЧИКИ КОМАНД =================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_keyboard = ReplyKeyboardMarkup(
         [
@@ -64,7 +63,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         resize_keyboard=True
     )
-
     with open(PHOTO_PATHS["main"], "rb") as photo:
         await update.message.reply_photo(
             photo=photo,
@@ -202,7 +200,9 @@ async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_menu = context.user_data.get("current_menu", "main")
-    
+    if current_menu == "main":
+        return
+
     if current_menu == "meal":
         main_keyboard = ReplyKeyboardMarkup(
             [
@@ -212,9 +212,7 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resize_keyboard=True
         )
         await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
-        context.user_data["current_menu"] = "main"
-    
-    elif current_menu in ["attractions", "souvenirs"]:
+    elif current_menu == "attractions":
         main_keyboard = ReplyKeyboardMarkup(
             [
                 ["🏛️ Достопримечательности", "🛏️ Комната 1"],
@@ -223,8 +221,6 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resize_keyboard=True
         )
         await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
-        context.user_data["current_menu"] = "main"
-    
     elif current_menu == "food":
         meal_keyboard = ReplyKeyboardMarkup(
             [
@@ -234,24 +230,33 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resize_keyboard=True
         )
         await update.message.reply_text("Выберите, что бы вы хотели:", reply_markup=meal_keyboard)
-        context.user_data["current_menu"] = "meal"
-    
     elif current_menu == "time":
-        meal_type = context.user_data["meal_type"]
-        menu = FOOD_MENU[meal_type]
-        buttons = [[key] for key in menu.keys()]
-        buttons.append(["🔙 Назад"])
-        keyboard = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-        await update.message.reply_text("Выберите блюдо:", reply_markup=keyboard)
-        context.user_data["current_menu"] = "food"
+        food_keyboard = ReplyKeyboardMarkup(
+            [
+                [next(k for k, v in FOOD_MENU[context.user_data["meal_type"]].items() if v == context.user_data["food_choice"])],
+                ["🔙 Назад"]
+            ],
+            resize_keyboard=True
+        )
+        await update.message.reply_text("Выберите блюдо:", reply_markup=food_keyboard)
+    elif current_menu == "souvenirs":
+        main_keyboard = ReplyKeyboardMarkup(
+            [
+                ["🏛️ Достопримечательности", "🛏️ Комната 1"],
+                ["🛏️ Комната 2", "🛍️ Сувенир"]
+            ],
+            resize_keyboard=True
+        )
+        await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
+
+    context.user_data["current_menu"] = "main"
 
 # ================= ЗАПУСК СЕРВИСА =================
-
 async def self_ping():
     while True:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(RENDER_URL) as response:
+                async with session.get(f"{RENDER_URL}/ping") as response:
                     logger.info(f"Self-ping: Status {response.status}")
         except Exception as e:
             logger.error(f"Self-ping error: {str(e)}")
@@ -259,12 +264,12 @@ async def self_ping():
 
 async def main():
     application = ApplicationBuilder().token(TOKEN).build()
-    
+
     # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.Regex(r"^🛏️ Комната [12]$"), choose_room))
     application.add_handler(MessageHandler(filters.Regex(r"^🍳 Завтрак$|^🍽️ Ужин$"), choose_meal_type))
-    application.add_handler(MessageHandler(filters.Regex(r"^🥞 Яичница$|^🧇 Блины$|^🍵 Чай$|^🍲 Суп 1$|^🍲 Суп 2$|^🍖 Пюре с мясом$"), choose_food))
+    application.add_handler(MessageHandler(filters.Regex(r"^ pancakes|omelette|tea|soup1|soup2|meat_puree$"), choose_food))
     application.add_handler(MessageHandler(filters.Regex(r"^\d{2}:\d{2}$"), confirm_order))
     application.add_handler(MessageHandler(filters.Regex(r"^🏛️ Достопримечательности$"), handle_attractions))
     application.add_handler(MessageHandler(filters.Regex(r"^🏛️ Музей Карельского фронта$"), handle_museum))
@@ -273,16 +278,31 @@ async def main():
     application.add_handler(MessageHandler(filters.Regex(r"^🔙 Назад$"), go_back))
 
     # Настройка вебхука
-    WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
-    await application.bot.set_webhook(WEBHOOK_URL)
+    PORT = int(os.getenv("PORT", 10000))  # Порт по умолчанию на Render
+    WEBHOOK_URL = f"{RENDER_URL}:{PORT}/{TOKEN}"
 
-    # Запуск self-ping
+    try:
+        # Удаление старого вебхука
+        await application.bot.delete_webhook()
+        logger.info("Старый вебхук удален")
+    except Exception as e:
+        logger.warning(f"Ошибка при удалении вебхука: {e}")
+
+    try:
+        # Установка нового вебхука
+        logger.info(f"Настройка вебхука на URL: {WEBHOOK_URL}")
+        await application.bot.set_webhook(url=WEBHOOK_URL)
+    except Exception as e:
+        logger.error(f"Ошибка установки вебхука: {e}")
+        return
+
+    # Запуск задач
     asyncio.create_task(self_ping())
 
-    # Запуск бота
+    # Запуск вебхука
     await application.run_webhook(
         listen="0.0.0.0",
-        port=int(os.getenv("PORT", 10000)),
+        port=PORT,
         webhook_url=WEBHOOK_URL,
         drop_pending_updates=True
     )
