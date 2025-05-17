@@ -12,6 +12,7 @@ from telegram.ext import (
     filters,
     Application,
 )
+from flask import Flask
 
 # Настройка логирования
 logging.basicConfig(
@@ -22,7 +23,7 @@ logging.basicConfig(
 # Константы
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
-RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
+RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com')  # Исправлено: убран пробел
 
 # Проверка обязательных переменных
 if not all([TOKEN, RENDER_URL]):
@@ -54,6 +55,12 @@ PHOTO_PATHS = {
     'museum': 'photos/museum_carpathian_front.jpg',
     'souvenir': 'photos/souvenir_magnet.jpg'
 }
+
+app = Flask(__name__)
+
+@app.route('/ping')
+def ping():
+    return "OK", 200
 
 # Стартовая команда
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -267,7 +274,7 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def self_ping():
     while True:
         try:
-            response = requests.get(RENDER_URL)
+            response = requests.get(f"{RENDER_URL}/ping")  # Исправлено: добавлен /ping
             logging.info(f"Self-ping успешен: {response.status_code}")
         except Exception as e:
             logging.error(f"Ошибка self-ping: {str(e)}")
@@ -275,45 +282,48 @@ def self_ping():
 
 # Основной запуск
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+    app_tg = ApplicationBuilder().token(TOKEN).build()
 
     # Регистрация обработчиков
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
-    app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
-    app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenirs))
-    app.add_handler(MessageHandler(filters.Regex(r'^🧲 Магнит на холодильник$'), handle_magnet))
-    app.add_handler(MessageHandler(filters.Regex(r'^🛏️ Комната [12]$'), choose_room))
-    app.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
-    app.add_handler(MessageHandler(filters.Regex(r'^ pancakes|omelette|tea|soup1|soup2|meat_puree$'), choose_food))
-    app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
-    app.add_handler(MessageHandler(filters.Regex(r'^🔙 Назад$'), go_back))
+    app_tg.add_handler(CommandHandler("start", start))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувенир$'), handle_souvenirs))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🧲 Магнит на холодильник$'), handle_magnet))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🛏️ Комната [12]$'), choose_room))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🍳 Завтрак$|^🍽️ Ужин$'), choose_meal_type))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🥞 Яичница$|^🧇 Блины$|^🍵 Чай$|^🍲 Суп 1$|^🍲 Суп 2$|^🍖 Пюре с мясом$'), choose_food))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
+    app_tg.add_handler(MessageHandler(filters.Regex(r'^🔙 Назад$'), go_back))
 
     # Запуск автопинга
     ping_thread = threading.Thread(target=self_ping)
+    ping_thread.daemon = True
     ping_thread.start()
 
     # Установка вебхука
-    PORT = int(os.getenv("PORT", 10000))  # Используем порт по умолчанию
-    WEBHOOK_URL = f"{RENDER_URL}:{PORT}/{TOKEN}"
+    PORT = int(os.getenv("PORT", 10000))
+    WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"  # Исправлено: убран порт
 
     try:
-        # Удаление старого вебхука
-        await app.bot.delete_webhook()
+        await app_tg.bot.delete_webhook()
         logging.info("Старый вебхук удален")
     except Exception as e:
         logging.warning(f"Ошибка при удалении вебхука: {e}")
 
     try:
-        # Установка нового вебхука
         logging.info(f"Настройка вебхука на URL: {WEBHOOK_URL}")
-        await app.bot.set_webhook(url=WEBHOOK_URL)
+        await app_tg.bot.set_webhook(url=WEBHOOK_URL)
     except Exception as e:
         logging.error(f"Ошибка установки вебхука: {e}")
         return
 
     # Запуск вебхука
-    await app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN)
+    await app_tg.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=WEBHOOK_URL
+    )
 
 if __name__ == '__main__':
     asyncio.run(main())
