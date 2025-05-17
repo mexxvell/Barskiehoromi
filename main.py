@@ -11,7 +11,6 @@ from telegram.ext import (
     ContextTypes,
     filters,
     Application,
-    PicklePersistence
 )
 
 # Настройка логирования
@@ -24,6 +23,10 @@ logging.basicConfig(
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
 RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
+
+# Проверка обязательных переменных
+if not all([TOKEN, RENDER_URL]):
+    raise EnvironmentError("Отсутствуют обязательные переменные окружения!")
 
 # Словари
 TIME_SLOTS = {
@@ -263,15 +266,8 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Автопинг каждые 5 минут
 def self_ping():
     while True:
-        url = os.getenv('RENDER_URL')
-        if not url:
-            logging.error("RENDER_URL не задан")
-            threading.Event().wait(300)
-            continue
-
         try:
-            clean_url = url.replace('%20', '')
-            response = requests.get(clean_url)
+            response = requests.get(RENDER_URL)
             logging.info(f"Self-ping успешен: {response.status_code}")
         except Exception as e:
             logging.error(f"Ошибка self-ping: {str(e)}")
@@ -281,6 +277,7 @@ def self_ping():
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
@@ -292,16 +289,16 @@ async def main():
     app.add_handler(MessageHandler(filters.Regex(r'^\d{2}:\d{2}$'), confirm_order))
     app.add_handler(MessageHandler(filters.Regex(r'^🔙 Назад$'), go_back))
 
-    # Запуск автопинга в отдельном потоке
+    # Запуск автопинга
     ping_thread = threading.Thread(target=self_ping)
     ping_thread.start()
 
-    # Настройка вебхука
-    PORT = int(os.getenv("PORT", 8000))
-    URL = f"{RENDER_URL}/{TOKEN}"
-
     # Установка вебхука
-    await app.bot.set_webhook(url=URL)
+    PORT = int(os.getenv("PORT", 8000))
+    WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
+
+    logging.info(f"Настройка вебхука на URL: {WEBHOOK_URL}")
+    await app.bot.set_webhook(url=WEBHOOK_URL)
 
     # Запуск вебхука
     await app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN)
