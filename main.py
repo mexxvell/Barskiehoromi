@@ -1,7 +1,8 @@
 import os
 import logging
 import asyncio
-import aiohttp
+import threading
+import requests
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
@@ -21,10 +22,9 @@ logger = logging.getLogger(__name__)
 # Константы
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")
-RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
 
 # Проверка переменных окружения
-if not all([TOKEN, RENDER_URL]):
+if not all([TOKEN, OWNER_ID]):
     raise EnvironmentError("Не заданы обязательные переменные окружения!")
 
 # Конфигурации
@@ -252,22 +252,21 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["current_menu"] = "main"
 
 # ================= ЗАПУСК СЕРВИСА =================
-async def self_ping():
+def self_ping():
     while True:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(f"{RENDER_URL}/ping") as response:
-                    logger.info(f"Self-ping: Status {response.status}")
+            response = requests.get("https://barskiehoromi.onrender.com/ping ")
+            logger.info(f"Self-ping: Status {response.status_code}")
         except Exception as e:
             logger.error(f"Self-ping error: {str(e)}")
-        await asyncio.sleep(300)
+        threading.Event().wait(300)
 
 async def main():
     application = ApplicationBuilder().token(TOKEN).build()
 
     # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Regex(r"^🛏️ Комната [12]$"), choose_room))
+    application.add_handler(MessageHandler(filters.Regex(r"^床位 [12]$"), choose_room))
     application.add_handler(MessageHandler(filters.Regex(r"^🍳 Завтрак$|^🍽️ Ужин$"), choose_meal_type))
     application.add_handler(MessageHandler(filters.Regex(r"^ pancakes|omelette|tea|soup1|soup2|meat_puree$"), choose_food))
     application.add_handler(MessageHandler(filters.Regex(r"^\d{2}:\d{2}$"), confirm_order))
@@ -277,35 +276,12 @@ async def main():
     application.add_handler(MessageHandler(filters.Regex(r"^🧲 Магнит на холодильник$"), handle_magnet))
     application.add_handler(MessageHandler(filters.Regex(r"^🔙 Назад$"), go_back))
 
-    # Настройка вебхука
-    PORT = int(os.getenv("PORT", 8443))  # Порт по умолчанию на Render
-    WEBHOOK_URL = f"{RENDER_URL}:{PORT}/{TOKEN}"
+    # Запуск автопинга
+    ping_thread = threading.Thread(target=self_ping)
+    ping_thread.start()
 
-    try:
-        # Удаление старого вебхука
-        await application.bot.delete_webhook()
-        logger.info("Старый вебхук удален")
-    except Exception as e:
-        logger.warning(f"Ошибка при удалении вебхука: {e}")
-
-    try:
-        # Установка нового вебхука
-        logger.info(f"Настройка вебхука на URL: {WEBHOOK_URL}")
-        await application.bot.set_webhook(url=WEBHOOK_URL)
-    except Exception as e:
-        logger.error(f"Ошибка установки вебхука: {e}")
-        return
-
-    # Запуск задач
-    asyncio.create_task(self_ping())
-
-    # Запуск вебхука
-    await application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL,
-        drop_pending_updates=True
-    )
+    # Запуск опроса
+    await application.run_polling(poll_interval=3)  # Опрос каждые 3 секунды
 
 if __name__ == "__main__":
     asyncio.run(main())
