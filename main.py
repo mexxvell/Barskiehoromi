@@ -20,7 +20,7 @@ logging.basicConfig(
 # Константы
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
-RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
+RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com')
 
 # Словари
 TIME_SLOTS = {
