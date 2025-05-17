@@ -255,7 +255,7 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def self_ping():
     while True:
         try:
-            response = requests.get("https://barskiehoromi.onrender.com/ping ")
+            response = requests.get("https://barskiehoromi.onrender.com/ping")
             logger.info(f"Self-ping: Status {response.status_code}")
         except Exception as e:
             logger.error(f"Self-ping error: {str(e)}")
@@ -277,7 +277,7 @@ async def main():
     application.add_handler(MessageHandler(filters.Regex(r"^🔙 Назад$"), go_back))
 
     # Запуск автопинга
-    ping_thread = threading.Thread(target=self_ping)
+    ping_thread = threading.Thread(target=self_ping, daemon=True)
     ping_thread.start()
 
     # Запуск опроса
