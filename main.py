@@ -16,7 +16,7 @@ logging.basicConfig(
 
 # Константы
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
+OWNER_ID = os.getenv('515650034')  # Telegram ID владельца
 
 # Словарь для хранения временных слотов
 TIME_SLOTS = {
