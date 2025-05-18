@@ -7,7 +7,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
 # Настройка логирования
@@ -291,14 +291,12 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text("Выберите, что бы вы хотели:", reply_markup=meal_submenu)
     elif current_menu == "time":
-        food_submenu = ReplyKeyboardMarkup(
-            [
-                [next(k for k, v in FOOD_MENU[context.user_data["meal_type"]].items() if v == context.user_data["food_choice"])],
-                ["🔙 Назад"]
-            ],
-            resize_keyboard=True
-        )
-        await update.message.reply_text("Выберите блюдо:", reply_markup=food_submenu)
+        meal_type = context.user_data["meal_type"]
+        menu = FOOD_MENU[meal_type]
+        buttons = [[key] for key in menu.keys()]
+        buttons.append(["🔙 Назад"])
+        keyboard = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+        await update.message.reply_text("Выберите блюдо:", reply_markup=keyboard)
     elif current_menu == "help":
         help_submenu = ReplyKeyboardMarkup(
             [
@@ -340,8 +338,24 @@ async def main():
     application.add_handler(MessageHandler(filters.Regex(r"^🏥 Больница$"), handle_hospital))
     application.add_handler(MessageHandler(filters.Regex(r"^🔙 Назад$"), go_back))
 
-    # Запуск опроса (если не используем вебхук)
-    await application.run_polling(poll_interval=3)
+    # Запуск вебхука
+    PORT = int(os.getenv("PORT", 8000))  # Используем порт 8000
+    WEBHOOK_URL = f"https://barskiehoromi.onrender.com :{PORT}/{TOKEN}"
+
+    # Установка вебхука
+    try:
+        await application.bot.set_webhook(WEBHOOK_URL)
+    except Exception as e:
+        logger.error(f"Ошибка установки вебхука: {e}")
+        return
+
+    # Запуск вебхука
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url=WEBHOOK_URL,
+        drop_pending_updates=True
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
