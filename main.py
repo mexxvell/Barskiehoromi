@@ -48,8 +48,7 @@ FOOD_MENU = {
 
 PHOTO_PATHS = {
     'main': 'photos/main_photo.jpg',
-    'museum': 'photos/museum_carpathian_front.jpg',
-    'souvenir': 'photos/souvenir_magnet.jpg'
+    'museum': 'photos/museum_carpathian_front.jpg'
 }
 
 # ================= ОБРАБОТЧИКИ КОМАНД =================
@@ -57,8 +56,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     main_keyboard = ReplyKeyboardMarkup(
         [
             ["🏠 О доме", "🌆 Город"],
-            ["🛍️ Сувениры", "🛎 Помощь"],
-            ["Обратная связь"]
+            ["🛎 Помощь", "Обратная связь"]
         ],
         resize_keyboard=True
     )
@@ -76,19 +74,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Обработчик "О доме"
 async def handle_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    with open(PHOTO_PATHS['main'], 'rb') as photo:
+        await update.message.reply_photo(
+            photo=photo,
+            caption="🏡 О доме:\n"
+                    "Наш дом расположен в живописном месте. Здесь вы найдете уют и комфорт.\n"
+                    "Можно заказать еду или получить помощь."
+        )
     home_submenu = ReplyKeyboardMarkup(
         [
-            ["🍽 Еда", "🧲 Сувениры"],
+            ["🍽 Еда"],
             ["🔙 Назад"]
         ],
         resize_keyboard=True
     )
-    await update.message.reply_text(
-        "🏠 О доме:\n"
-        "Наш дом расположен в живописном месте. Здесь вы найдете уют и комфорт.\n"
-        "Можно заказать еду или выбрать сувениры.",
-        reply_markup=home_submenu
-    )
+    await update.message.reply_text("Выберите нужный раздел:", reply_markup=home_submenu)
     context.user_data['current_menu'] = 'home'
 
 # Обработчик "Еда"
@@ -213,35 +213,48 @@ async def handle_museum(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="🏛️ Музей Карельского фронта\n📍 Адрес: г. Беломорск, ул. Банковская, д. 26"
         )
     await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
-        [["🏠 О доме", "🛍️ Сувениры", "🌆 Город", "Обратная связь"],
-         ["🛎 Помощь"]],
+        [["🏠 О доме", "🌆 Город", "Обратная связь", "🛎 Помощь"],
+         ["🔙 Назад"]],
         resize_keyboard=True
     ))
 
-# Обработчик "Сувениры"
-async def handle_souvenirs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['current_menu'] = 'souvenirs'
-    souvenir_submenu = ReplyKeyboardMarkup(
+# Обработчик "Помощь"
+async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_submenu = ReplyKeyboardMarkup(
         [
-            ["🧲 Магнит на холодильник"],
+            ["🚖 Такси", "🏥 Больница"],
             ["🔙 Назад"]
         ],
         resize_keyboard=True
     )
-    await update.message.reply_text("🛍️ Сувениры:", reply_markup=souvenir_submenu)
+    await update.message.reply_text(
+        "🛎️ Помощь:\n"
+        "Здесь можно найти важную информацию о городе и услугах.",
+        reply_markup=help_submenu
+    )
+    context.user_data['current_menu'] = 'help'
 
-# Обработчик "Магнит на холодильник"
-async def handle_magnet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    with open(PHOTO_PATHS['souvenir'], 'rb') as photo:
-        await update.message.reply_photo(
-            photo=photo,
-            caption="🧲 Магнит на холодильник (50 гр) - 100р"
+# Обработчик "Такси"
+async def handle_taxi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🚖 Такси:\n"
+        "Телефон такси: +7-999-999-99-99",
+        reply_markup=ReplyKeyboardMarkup(
+            [["🔙 Назад"]],
+            resize_keyboard=True
         )
-    await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
-        [["🏠 О доме", "🛍️ Сувениры", "🌆 Город", "Обратная связь"],
-         ["🛎 Помощь"]],
-        resize_keyboard=True
-    ))
+    )
+
+# Обработчик "Больница"
+async def handle_hospital(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🏥 Больница:\n"
+        "Адрес: г. Беломорск, ул. Больничная, д. 1",
+        reply_markup=ReplyKeyboardMarkup(
+            [["🔙 Назад"]],
+            resize_keyboard=True
+        )
+    )
 
 # Обработчик "Обратная связь"
 async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -263,13 +276,6 @@ async def send_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_bot.send_message(chat_id=OWNER_ID, text=message)
     await update.message.reply_text("✅ Сообщение отправлено хозяевам!", reply_markup=ReplyKeyboardRemove())
 
-# Обработчик кнопки "Помощь"
-async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🛎️ Помощь:\n"
-        "Если возникли вопросы — напишите нам в личные сообщения."
-    )
-
 # Обработчик кнопки "Назад"
 async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_menu = context.user_data.get('current_menu', 'main')
@@ -280,13 +286,12 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         main_keyboard = ReplyKeyboardMarkup(
             [
                 ["🏠 О доме", "🌆 Город"],
-                ["🛍️ Сувениры", "🛎 Помощь"],
-                ["Обратная связь"]
+                ["🛎 Помощь", "Обратная связь"]
             ],
             resize_keyboard=True
         )
         await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
-    elif current_menu in ['city', 'attractions']:
+    elif current_menu == 'city':
         city_submenu = ReplyKeyboardMarkup(
             [
                 ["🏛️ Достопримечательности"],
@@ -313,26 +318,27 @@ async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resize_keyboard=True
         )
         await update.message.reply_text("Выберите блюдо:", reply_markup=food_submenu)
-    elif current_menu == 'souvenirs':
-        souvenirs_submenu = ReplyKeyboardMarkup(
+    elif current_menu == 'help':
+        help_submenu = ReplyKeyboardMarkup(
             [
-                ["🧲 Магнит на холодильник"],
+                ["🚖 Такси", "🏥 Больница"],
                 ["🔙 Назад"]
             ],
             resize_keyboard=True
         )
-        await update.message.reply_text("🛍️ Сувениры:", reply_markup=souvenirs_submenu)
+        await update.message.reply_text("🛎️ Помощь:", reply_markup=help_submenu)
     elif current_menu == 'feedback':
         main_keyboard = ReplyKeyboardMarkup(
             [
                 ["🏠 О доме", "🌆 Город"],
-                ["🛍️ Сувениры", "🛎 Помощь"],
-                ["Обратная связь"]
+                ["🛎 Помощь", "Обратная связь"]
             ],
             resize_keyboard=True
         )
         await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
         context.user_data['current_menu'] = 'main'
+
+    context.user_data['current_menu'] = 'main'
 
 # Автопинг каждые 5 минут
 def self_ping():
@@ -365,8 +371,9 @@ def main():
     app.add_handler(MessageHandler(filters.Regex(r'^🌆 Город$'), handle_city))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Достопримечательности$'), handle_attractions))
     app.add_handler(MessageHandler(filters.Regex(r'^🏛️ Музей Карельского фронта$'), handle_museum))
-    app.add_handler(MessageHandler(filters.Regex(r'^🛍️ Сувениры$'), handle_souvenirs))
-    app.add_handler(MessageHandler(filters.Regex(r'^🧲 Магнит на холодильник$'), handle_magnet))
+    app.add_handler(MessageHandler(filters.Regex(r'^🛎 Помощь$'), handle_help))
+    app.add_handler(MessageHandler(filters.Regex(r'^🚖 Такси$'), handle_taxi))
+    app.add_handler(MessageHandler(filters.Regex(r'^🏥 Больница$'), handle_hospital))
     app.add_handler(MessageHandler(filters.Regex(r'^Обратная связь$'), handle_feedback))
     app.add_handler(MessageHandler(filters.Regex(r'^✅ Отправить$'), send_feedback))
     app.add_handler(MessageHandler(filters.Regex(r'^🔙 Назад$'), go_back))
