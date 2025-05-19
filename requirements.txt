@@ -1,2 +1,7 @@
 python-telegram-bot>=20.0
-requests
+Flask==2.3.2
+waitress==2.1.2
+gunicorn==23.0.0
+python-dotenv==0.21.0
+apscheduler==3.10.1
+requests==2.31.0
