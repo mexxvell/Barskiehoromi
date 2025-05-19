@@ -50,8 +50,7 @@ def start(message):
         types.KeyboardButton("🏠 О доме"),
         types.KeyboardButton("🌆 Город"),
         types.KeyboardButton("🛍️ Сувениры"),
-        types.KeyboardButton("Обратная связь"),
-        types.KeyboardButton("🛎 Помощь")
+        types.KeyboardButton("Обратная связь")
     )
     bot.send_message(
         message.chat.id,
@@ -130,6 +129,9 @@ def confirm_order(message):
         bot.send_message(user_id, "❌ Ошибка обработки заказа.")
         return
     
+    # Формирование username
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {user_id}"
+    
     # Отправка пользователю
     bot.send_message(user_id, "✅ Ваш заказ отправлен хозяевам!", reply_markup=types.ReplyKeyboardRemove())
     
@@ -137,20 +139,24 @@ def confirm_order(message):
     meal_type_ru = "Завтрак" if meal_type == "breakfast" else "Ужин"
     owner_message = (
         f"🛎️ Новый заказ!\n"
-        f"👤 Пользователь: {user_id}\n"
+        f"👤 Пользователь: {username}\n"
         f"🍽️ Тип: {meal_type_ru}\n"
         f"🍲 Блюдо: {food}\n"
         f"⏰ Время: {message.text}"
     )
     bot.send_message(OWNER_ID, owner_message)
     
-    # Очистка данных
     del user_data[user_id]
 
 @bot.message_handler(func=lambda m: m.text == "🌆 Город")
 def handle_city(message):
     city_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    city_submenu.add(types.KeyboardButton("🏛️ Музей Карельского фронта"), types.KeyboardButton("🔙 Назад"))
+    city_submenu.add(
+        types.KeyboardButton("🏛️ Музей Карельского фронта"),
+        types.KeyboardButton("🚖 Такси"),
+        types.KeyboardButton("🏥 Больница"),
+        types.KeyboardButton("🔙 Назад")
+    )
     bot.send_message(
         message.chat.id,
         "🌆 Г. Беломорск, Республика Карелия:\n"
@@ -167,12 +173,22 @@ def handle_museum(message):
             photo,
             caption="🏛️ Музей Карельского фронта\n📍 Адрес: г. Беломорск, ул. Банковская, д. 26"
         )
-    start(message)
+    # Убрано автоматическое возвращение в главное меню
+
+@bot.message_handler(func=lambda m: m.text in ["🚖 Такси", "🏥 Больница"])
+def handle_services(message):
+    if message.text == "🚖 Такси":
+        bot.send_message(message.chat.id, "🚖 Телефон такси: +7-999-999-99-99")
+    else:
+        bot.send_message(message.chat.id, "🏥 Адрес больницы: г. Беломорск, ул. Больничная, д. 1")
 
 @bot.message_handler(func=lambda m: m.text == "🛍️ Сувениры")
 def handle_souvenirs(message):
     souvenir_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    souvenir_submenu.add(types.KeyboardButton("🧲 Магнит на холодильник"), types.KeyboardButton("🔙 Назад"))
+    souvenir_submenu.add(
+        types.KeyboardButton("🧲 Магнит на холодильник"), 
+        types.KeyboardButton("🔙 Назад")
+    )
     bot.send_message(message.chat.id, "🛍️ Сувениры:", reply_markup=souvenir_submenu)
 
 @bot.message_handler(func=lambda m: m.text == "🧲 Магнит на холодильник")
@@ -183,7 +199,7 @@ def handle_magnet(message):
             photo,
             caption="🧲 Магнит на холодильник (50 гр) - 100р"
         )
-    start(message)
+    # Убрано автоматическое возвращение в главное меню
 
 @bot.message_handler(func=lambda m: m.text == "Обратная связь")
 def handle_feedback(message):
@@ -191,25 +207,9 @@ def handle_feedback(message):
     bot.register_next_step_handler(msg, send_feedback)
 
 def send_feedback(message):
-    bot.send_message(OWNER_ID, f"📬 Отзыв от {message.chat.id}:\n{message.text}")
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.chat.id}"
+    bot.send_message(OWNER_ID, f"📬 Отзыв от {username}:\n{message.text}")
     bot.send_message(message.chat.id, "✅ Сообщение отправлено!", reply_markup=types.ReplyKeyboardRemove())
-
-@bot.message_handler(func=lambda m: m.text == "🛎 Помощь")
-def handle_help(message):
-    help_menu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    help_menu.add(
-        types.KeyboardButton("🚖 Такси"),
-        types.KeyboardButton("🏥 Больница"),
-        types.KeyboardButton("🔙 Назад")
-    )
-    bot.send_message(message.chat.id, "🛎️ Помощь:", reply_markup=help_menu)
-
-@bot.message_handler(func=lambda m: m.text in ["🚖 Такси", "🏥 Больница"])
-def handle_services(message):
-    if message.text == "🚖 Такси":
-        bot.send_message(message.chat.id, "🚖 Телефон такси: +7-999-999-99-99")
-    else:
-        bot.send_message(message.chat.id, "🏥 Адрес больницы: г. Беломорск, ул. Больничная, д. 1")
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад")
 def go_back(message):
