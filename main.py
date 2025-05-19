@@ -149,11 +149,7 @@ def show_bike_details(message):
         bot.send_photo(
             message.chat.id,
             photo,
-            caption=f"🚲 {message.text}\n"
-                    f"Цены:\n"
-                    f"- 1 час: {bike['price_hour']}₽\n"
-                    f"- Целый день: {bike['price_day']}₽\n"
-                    f"Правила: возврат в исправном состоянии."
+            caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
         )
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton("✅ Хочу кататься!"), types.KeyboardButton("🔙 Назад"))
@@ -161,8 +157,17 @@ def show_bike_details(message):
 
 @bot.message_handler(func=lambda m: m.text == "✅ Хочу кататься!")
 def confirm_bike_rental(message):
-    bot.send_message(OWNER_ID, f"🚴 Новый прокат от @{message.from_user.username}!")
-    bot.send_message(message.chat.id, "✅ Велосипед забронирован. Хозяин свяжется с вами.", reply_markup=types.ReplyKeyboardRemove())
+    try:
+        bot.send_message(OWNER_ID, f"🚴 Новый прокат от @{message.from_user.username}!")
+        bot.send_message(
+            message.chat.id,
+            "✅ Велосипед забронирован. Хозяин свяжется с вами.",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+        start(message)  # Важно: возврат в главное меню
+    except Exception as e:
+        logger.error(f"Ошибка при бронировании: {e}")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка. Попробуйте позже.")
 
 # ================= ОБНОВЛЕНИЕ МЕНЮ =================
 @bot.message_handler(func=lambda m: m.text == "🏠 О доме")
