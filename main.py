@@ -1,6 +1,5 @@
 import os
 import logging
-import threading
 import requests
 from flask import Flask, request
 import telebot
@@ -16,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Константы
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")  # Telegram ID владельца
-RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com")
+RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
 
 # Проверка переменных окружения
 if not all([TOKEN, OWNER_ID, RENDER_URL]):
@@ -119,8 +118,8 @@ def confirm_order(message):
         f"🛎️ Новый заказ!\n"
         f"👤 Пользователь: {user_id}\n"
         f"🍽️ Тип: {meal_type.capitalize()}\n"
-        "🍲 Блюдо: {food}\n"
-        "⏰ Время: {message.text}"
+        f"🍲 Блюдо: {food}\n"
+        f"⏰ Время: {message.text}"
     )
     bot.send_message(OWNER_ID, message_text)
 
@@ -135,6 +134,17 @@ def handle_city(message):
         "Население: ~12 000 чел.\n"
         "Штаб Карельского фронта во время ВОВ находился здесь.",
         reply_markup=city_submenu
+    )
+
+@bot.message_handler(func=lambda m: m.text == "🏛️ Достопримечательности")
+def handle_attractions(message):
+    logger.info(f"Пользователь {message.chat.id} выбрал 'Достопримечательности'.")
+    attractions_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    attractions_submenu.add(types.KeyboardButton("🏛️ Музей Карельского фронта"), types.KeyboardButton("🔙 Назад"))
+    bot.send_message(
+        message.chat.id,
+        "🏛️ Выберите достопримечательность:",
+        reply_markup=attractions_submenu
     )
 
 @bot.message_handler(func=lambda m: m.text == "🏛️ Музей Карельского фронта")
