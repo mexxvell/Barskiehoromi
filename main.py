@@ -60,14 +60,18 @@ init_db()
 # --- Меню ---
 FOOD_MENU = {
     "breakfast": {
-        "Яичница (150г)": {"price": 500, "photo": "egg.jpg"},
-        "Кофе": {"price": 200, "photo": None},
-        "Блины (180г)": {"price": 450, "photo": "pancake.jpg"}
+        "Яичница (150г)":     {"price": 500, "photo": "egg.jpg"},
+        "Кофе (200мл)":        {"price": 200, "photo": None},
+        "Блины (180г)":       {"price": 450, "photo": "pancake.jpg"},
+        "Каша овсяная (250г)": {"price": 300, "photo": None},
+        "Тосты с джемом (120г)": {"price": 350, "photo": None}
     },
     "dinner": {
-        "Суп (300г)": {"price": 350, "photo": "soup.jpg"},
-        "Рыба (250г)": {"price": 600, "photo": "fish.jpg"},
-        "Чай": {"price": 150, "photo": None}
+        "Суп (300г)":                {"price": 350, "photo": "soup.jpg"},
+        "Рыба (250г)":               {"price": 600, "photo": "fish.jpg"},
+        "Чай (250мл)":               {"price": 150, "photo": None},
+        "Картофельное пюре (200г)":  {"price": 250, "photo": None},
+        "Котлета по-домашнему (180г)": {"price": 400, "photo": None}
     }
 }
 
@@ -83,7 +87,7 @@ WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
 
-# ================= ОБРАБОТЧИКИ КНОПОК =================
+# ================= ОБРАБОТЧИКИ =================
 
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -147,16 +151,17 @@ def handle_museum(message):
     except FileNotFoundError:
         logger.error("Файл photos/museum.jpg не найден")
         bot.send_message(message.chat.id, "🏛️ Музей Карельского фронта\n📍 Адрес: ул. Банковская, 26")
-    # Возврат к разделу «О доме»
-    handle_home(message)
+    # Здесь НЕТ вызова start(), чтобы остаться в меню «Город»
 
 @bot.message_handler(func=lambda m: m.text == "🚖 Такси")
 def handle_taxi(message):
     bot.send_message(message.chat.id, "🚖 Телефон такси: +7-999-999-99-99")
+    # Здесь тоже остаёмся в меню «Город»
 
 @bot.message_handler(func=lambda m: m.text == "🏥 Больница")
 def handle_hospital(message):
     bot.send_message(message.chat.id, "🏥 Адрес больницы: ул. Больничная, 1")
+    # Здесь не возвращаемся в “start” — остаёмся в «Город»
 
 @bot.message_handler(func=lambda m: m.text == "🛍️ Сувениры")
 def handle_souvenirs(message):
@@ -179,8 +184,7 @@ def handle_magnet(message):
     except FileNotFoundError:
         logger.error("Файл photos/magnet.jpg не найден")
         bot.send_message(message.chat.id, "🧲 Магнит на холодильник - 100₽")
-    # Возврат к старту
-    start(message)
+    # После фото не вызываем start() — остаёмся в «Сувениры»
 
 @bot.message_handler(func=lambda m: m.text == "Обратная связь")
 def handle_feedback(message):
@@ -209,8 +213,8 @@ def bike_rental(message):
 
 @bot.message_handler(func=lambda m: m.text in ["Велосипед 1", "Велосипед 2"])
 def show_bike_details(message):
-    try:
-        bike = BIKE_MENU[message.text]
+    bike = BIKE_MENU.get(message.text)
+    if bike:
         if bike["photo"]:
             try:
                 with open(f"photos/{bike['photo']}", "rb") as photo:
@@ -240,30 +244,26 @@ def show_bike_details(message):
             types.KeyboardButton("🔙 Назад")
         )
         bot.send_message(message.chat.id, "Забронировать?", reply_markup=markup)
-    except Exception as e:
-        logger.error(f"Ошибка при загрузке велосипеда: {e}")
-        bot.send_message(message.chat.id, "❌ Не удалось загрузить информацию о велосипеде.")
+    else:
+        bot.send_message(message.chat.id, "❌ Такой велосипед не найден.")
 
 @bot.message_handler(func=lambda m: m.text == "✅ Хочу кататься!")
 def confirm_bike_rental(message):
-    # Сохраняем аренду в базу
+    # Сохраняем аренду в БД
     try:
         conn = sqlite3.connect('bot_data.db')
         cursor = conn.cursor()
-        # Найдем последний выбранный велосипед из предыдущего сообщения
-        # Тут мы полагаемся на то, что handler show_bike_details сразу перед этим показал кнопку
+        # Определяем, какой велосипед выбирал пользователь,
+        # допустим, что он ответил reply_to на сообщение show_bike_details
         bike_type = None
-        # Можно хранить временно выбор пользователя, но для простоты возьмем предыдущую строку чата
-        # Предположим, что пользователь точно нажал кнопку "Велосипед 1" или "Велосипед 2" перед этим
-        # Передаем bike_type через состояние или БД; в рамках данного примера просто возьмем текст из message.reply_to_message
-        if message.reply_to_message and message.reply_to_message.text:
-            # Ищем цифру "1" или "2" в тексте сообщения-ответа
-            if "Велосипед 1" in message.reply_to_message.text:
-                bike_type = "Велосипед 1"
-            elif "Велосипед 2" in message.reply_to_message.text:
-                bike_type = "Велосипед 2"
+        if message.reply_to_message and message.reply_to_message.caption:
+            # Пример: "🚲 Велосипед 1\nЦены: ... "
+            text = message.reply_to_message.caption
+            if "Велосипед 1" in text:
+                bike_type = "Велосипед 1"
+            elif "Велосипед 2" in text:
+                bike_type = "Велосипед 2"
         if not bike_type:
-            # Если не удалось определить, запишем generic
             bike_type = "Неизвестный велосипед"
         cursor.execute(
             "INSERT INTO bike_rentals (user_id, bike_type, rent_time) VALUES (?, ?, ?)",
@@ -274,7 +274,6 @@ def confirm_bike_rental(message):
     except Exception as e:
         logger.error(f"Ошибка при записи проката велосипеда в БД: {e}")
 
-    # Уведомляем владельца
     user_tag = message.from_user.username or str(message.from_user.id)
     try:
         bot.send_message(OWNER_ID, f"🚴 Новый прокат от @{user_tag}: {bike_type}")
@@ -282,8 +281,8 @@ def confirm_bike_rental(message):
         logger.error(f"Не удалось отправить владельцу сообщение о прокате: {e}")
 
     bot.send_message(message.chat.id, "✅ Велосипед забронирован. Хозяин свяжется с вами.", reply_markup=types.ReplyKeyboardRemove())
-    # Возврат к старту
-    start(message)
+    # Оставляем пользователя в том же разделе «Прокат велосипедов»
+    bike_rental(message)
 
 # --- Еда и корзина ---
 @bot.message_handler(func=lambda m: m.text == "🍽 Еда")
@@ -311,25 +310,22 @@ def add_to_cart(message):
     meal_type = "breakfast" if message.text in FOOD_MENU["breakfast"] else "dinner"
     dish_info = FOOD_MENU[meal_type][message.text]
 
-    # Отправка фото (если есть)
     if dish_info["photo"]:
         try:
             with open(f"photos/{dish_info['photo']}", "rb") as photo:
                 bot.send_photo(message.chat.id, photo)
         except FileNotFoundError:
             logger.error(f"Фото для {message.text} не найдено")
-            bot.send_message(message.chat.id, f"{message.text} - {dish_info['price']}₽")
+            bot.send_message(message.chat.id, f"{message.text} — {dish_info['price']}₽")
     else:
-        bot.send_message(message.chat.id, f"{message.text} - {dish_info['price']}₽")
+        bot.send_message(message.chat.id, f"{message.text} — {dish_info['price']}₽")
 
-    # Кнопки подтверждения
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         types.KeyboardButton("✅ Добавить в корзину"),
         types.KeyboardButton("🔙 Назад")
     )
-    msg = bot.send_message(message.chat.id, f"{message.text} - {dish_info['price']}₽", reply_markup=markup)
-    # Передаём meal_type и dish через lambda
+    msg = bot.send_message(message.chat.id, f"{message.text} — {dish_info['price']}₽", reply_markup=markup)
     bot.register_next_step_handler(msg, lambda m, mt=meal_type, ds=message.text: confirm_add_to_cart(m, mt, ds))
 
 def confirm_add_to_cart(message, meal_type, dish):
@@ -347,8 +343,8 @@ def confirm_add_to_cart(message, meal_type, dish):
         except Exception as e:
             logger.error(f"Ошибка при добавлении в корзину: {e}")
             bot.send_message(message.chat.id, "❌ Не удалось добавить в корзину.")
-    # Возврат к старту после добавления или если нажали «Назад»
-    start(message)
+    # После добавления остаёмся в разделе «Еда»
+    handle_food(message)
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Корзина")
 def show_cart(message):
@@ -363,9 +359,11 @@ def show_cart(message):
         return
 
     total = sum(item[2] for item in items)
-    cart_text = "🛒 Ваш заказ:\n" + "\n".join(
-        [f"- {dish} ({meal_type}): {price}₽" for dish, meal_type, price in items]
-    ) + f"\nИтого: {total}₽"
+    cart_text = (
+        "🛒 Ваш заказ:\n"
+        + "\n".join([f"- {dish} ({meal_type}): {price}₽" for dish, meal_type, price in items])
+        + f"\nИтого: {total}₽"
+    )
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         types.KeyboardButton("✅ Подтвердить заказ"),
@@ -375,7 +373,6 @@ def show_cart(message):
 
 @bot.message_handler(func=lambda m: m.text == "✅ Подтвердить заказ")
 def confirm_cart(message):
-    # Выдаем конкретные слоты времени
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         types.KeyboardButton("09:00"),
@@ -390,7 +387,6 @@ def handle_delivery_time(message):
         prompt = bot.send_message(message.chat.id, "Укажите время в формате ЧЧ:ММ:")
         bot.register_next_step_handler(prompt, save_custom_time)
     else:
-        # Пользователь выбрал "09:00" или "18:00"
         save_order(message, custom_time=message.text)
 
 def save_custom_time(message):
@@ -417,12 +413,8 @@ def save_order(message, custom_time=None):
     for dish, meal_type in items:
         order_text += f"- {dish} ({meal_type.capitalize()})\n"
 
-    if custom_time:
-        order_text += f"⏰ Время: {custom_time}"
-    else:
-        # В случае, если save_order вызван напрямую без передачи custom_time,
-        # допустим, message.text уже содержит нужное время
-        order_text += f"⏰ Время: {message.text}"
+    order_time = custom_time if custom_time else message.text
+    order_text += f"⏰ Время: {order_time}"
 
     try:
         bot.send_message(OWNER_ID, order_text)
@@ -432,15 +424,16 @@ def save_order(message, custom_time=None):
         conn.close()
         return
 
-    # Удаляем позиции из корзины после успешной отправки
     cursor.execute("DELETE FROM cart WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
     bot.send_message(user_id, "✅ Заказ отправлен!", reply_markup=types.ReplyKeyboardRemove())
+    # После этого остаёмся в разделе «Еда» — покажем меню снова
+    handle_food(message)
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад")
 def go_back(message):
-    # Возврат к стартовому меню
+    # Простой возврат к стартовому меню
     start(message)
 
 # --- Автопинг ---
@@ -472,5 +465,4 @@ def ping():
     return "OK", 200
 
 if __name__ == "__main__":
-    # Откроем на всех интерфейсах, порт по умолчанию или из окружения
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
