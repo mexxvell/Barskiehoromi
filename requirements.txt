@@ -3,4 +3,3 @@ pyTelegramBotAPI==4.8.0
 gunicorn==23.0.0
 python-dotenv==0.21.0
 requests==2.31.0
-sqlite3
