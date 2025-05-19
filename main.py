@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Константы
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")  # Telegram ID владельца
-RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
+RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com")
 
 # Проверка переменных окружения
 if not all([TOKEN, OWNER_ID, RENDER_URL]):
