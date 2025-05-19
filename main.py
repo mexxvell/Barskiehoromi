@@ -5,7 +5,6 @@ import threading
 from flask import Flask, request
 import telebot
 from telebot import types
-from waitress import serve
 
 # Настройка логирования
 logging.basicConfig(
@@ -15,9 +14,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")  # Telegram ID владельца
-RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
+RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
 
 # Проверка переменных окружения
 if not all([TOKEN, OWNER_ID, RENDER_URL]):
@@ -134,7 +133,7 @@ def choose_food(message):
 def confirm_order(message):
     user_id = message.chat.id
     meal_type = "breakfast" if message.text in TIME_SLOTS["breakfast"] else "dinner"
-    food = next(k for k, v in FOOD_MENU[meal_type].items() if v == bot.get_user_context()[user_id].get("food_choice"))
+    food = next(k for k, v in FOOD_MENU[meal_type].items() if v == message.text)
     
     bot.send_message(
         user_id,
@@ -227,7 +226,6 @@ def handle_feedback(message):
     )
     bot.register_next_step_handler(message, send_feedback)
 
-@bot.message_handler(func=lambda m: m.text == "✅ Отправить")
 def send_feedback(message):
     user_message = message.text
     message_text = f"📬 Новая обратная связь:\n{user_message}"
@@ -236,39 +234,6 @@ def send_feedback(message):
         message.chat.id,
         "✅ Сообщение отправлено хозяевам!",
         reply_markup=types.ReplyKeyboardRemove()
-    )
-
-@bot.message_handler(func=lambda m: m.text == "🛎 Помощь")
-def handle_help(message):
-    help_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    help_submenu.add(
-        types.KeyboardButton("🚖 Такси"),
-        types.KeyboardButton("🏥 Больница"),
-        types.KeyboardButton("🔙 Назад")
-    )
-    bot.send_message(
-        message.chat.id,
-        "🛎️ Помощь:\n"
-        "Здесь можно найти важную информацию о городе и услугах.",
-        reply_markup=help_submenu
-    )
-
-@bot.message_handler(func=lambda m: m.text == "🚖 Такси")
-def handle_taxi(message):
-    bot.send_message(
-        message.chat.id,
-        "🚖 Такси:\n"
-        "Телефон такси: +7-999-999-99-99",
-        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[[types.KeyboardButton("🔙 Назад")]])
-    )
-
-@bot.message_handler(func=lambda m: m.text == "🏥 Больница")
-def handle_hospital(message):
-    bot.send_message(
-        message.chat.id,
-        "🏥 Больница:\n"
-        "Адрес: г. Беломорск, ул. Больничная, д. 1",
-        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[[types.KeyboardButton("🔙 Назад")]])
     )
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад")
@@ -310,8 +275,8 @@ def self_ping():
 
 if __name__ == "__main__":
     # Запуск Flask-сервера
-    PORT = int(os.getenv("PORT", 8000))
-    serve(app, host="0.0.0.0", port=PORT)
+    port = int(os.getenv("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
     
     # Запуск автопинга
     ping_thread = threading.Thread(target=self_ping, daemon=True)
