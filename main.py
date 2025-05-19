@@ -3,9 +3,7 @@ import re
 import sqlite3
 import logging
 import threading
-import schedule
 import time
-from datetime import datetime, timedelta
 from flask import Flask, request
 import telebot
 from telebot import types
@@ -65,11 +63,6 @@ BIKE_MENU = {
     "Велосипед 2": {"price_hour": 600, "price_day": 1200, "photo": "bike2.jpg"}
 }
 
-TIME_SLOTS = {
-    "breakfast": ["08:00", "09:00", "10:00"],
-    "dinner": ["18:00", "19:00", "20:00"]
-}
-
 # --- Инициализация бота и Flask ---
 app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN)
@@ -77,9 +70,7 @@ WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
 
-# ================= ОСНОВНЫЕ ОБРАБОТЧИКИ =================
-user_data = {}
-
+# ================= ОБРАБОТЧИКИ КНОПОК =================
 @bot.message_handler(commands=["start"])
 def start(message):
     main_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
@@ -91,13 +82,7 @@ def start(message):
     )
     bot.send_message(
         message.chat.id,
-        "👋 Добро пожаловать в наш дом! 🏡\n"
-        "Правила использования:\n"
-        "1) Выберите раздел из меню\n"
-        "2) Следуйте инструкциям\n"
-        "3) При заказе еды укажите удобное время\n"
-        "4) Информация отправится хозяевам\n"
-        "5) Они свяжутся для уточнения деталей",
+        "👋 Добро пожаловать в наш дом! 🏡\nВыберите раздел:",
         reply_markup=main_keyboard
     )
 
@@ -107,27 +92,39 @@ def handle_home(message):
         bot.send_photo(
             message.chat.id,
             photo,
-            caption="🏡 О доме:\nНаш дом расположен в живописном месте. Здесь вы найдете уют и комфорт.\nМожно заказать еду или получить помощь."
+            caption="🏡 Уютный дом с видом на лес. Все удобства включены."
         )
-    home_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    home_submenu.add(types.KeyboardButton("🍽 Еда"), types.KeyboardButton("🚲 Прокат велосипедов"), types.KeyboardButton("🔙 Назад"))
-    bot.send_message(message.chat.id, "Выберите нужный раздел:", reply_markup=home_submenu)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("🍽 Еда"),
+        types.KeyboardButton("🚲 Прокат велосипедов"),
+        types.KeyboardButton("🔙 Назад")
+    )
+    bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "🌆 Город")
 def handle_city(message):
-    city_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    city_submenu.add(types.KeyboardButton("🏛️ Музей Карельского фронта"), types.KeyboardButton("🚖 Такси"), types.KeyboardButton("🏥 Больница"), types.KeyboardButton("🔙 Назад"))
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("🏛️ Музей Карельского фронта"),
+        types.KeyboardButton("🚖 Такси"),
+        types.KeyboardButton("🏥 Больница"),
+        types.KeyboardButton("🔙 Назад")
+    )
     bot.send_message(
         message.chat.id,
-        "🌆 Г. Беломорск, Республика Карелия:\nНаселение: ~12 000 чел.\nШтаб Карельского фронта во время ВОВ находился здесь.",
-        reply_markup=city_submenu
+        "🌆 Г. Беломорск, Республика Карелия:\nНаселение: ~12 000 чел.",
+        reply_markup=markup
     )
 
 @bot.message_handler(func=lambda m: m.text == "🛍️ Сувениры")
 def handle_souvenirs(message):
-    souvenir_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    souvenir_submenu.add(types.KeyboardButton("🧲 Магнит на холодильник"), types.KeyboardButton("🔙 Назад"))
-    bot.send_message(message.chat.id, "🛍️ Сувениры:", reply_markup=souvenir_submenu)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("🧲 Магнит на холодильник"),
+        types.KeyboardButton("🔙 Назад")
+    )
+    bot.send_message(message.chat.id, "🛍️ Сувениры:", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "Обратная связь")
 def handle_feedback(message):
@@ -135,31 +132,72 @@ def handle_feedback(message):
     bot.register_next_step_handler(msg, send_feedback)
 
 def send_feedback(message):
-    username = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.chat.id}"
-    bot.send_message(OWNER_ID, f"📬 Отзыв от {username}:\n{message.text}")
+    bot.send_message(OWNER_ID, f"📬 Отзыв от @{message.from_user.username}:\n{message.text}")
     bot.send_message(message.chat.id, "✅ Сообщение отправлено!", reply_markup=types.ReplyKeyboardRemove())
 
-# ================= КОРЗИНА И ЗАКАЗ ЕДЫ =================
+# --- Прокат велосипедов ---
+@bot.message_handler(func=lambda m: m.text == "🚲 Прокат велосипедов")
+def bike_rental(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("Велосипед 1"),
+        types.KeyboardButton("Велосипед 2"),
+        types.KeyboardButton("🔙 Назад")
+    )
+    bot.send_message(message.chat.id, "Выберите велосипед:", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text in ["Велосипед 1", "Велосипед 2"])
+def show_bike_details(message):
+    bike = BIKE_MENU[message.text]
+    with open(f"photos/{bike['photo']}", "rb") as photo:
+        bot.send_photo(
+            message.chat.id,
+            photo,
+            caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
+        )
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("✅ Хочу кататься!"),
+        types.KeyboardButton("🔙 Назад")
+    )
+    bot.send_message(message.chat.id, "Забронировать?", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text == "✅ Хочу кататься!")
+def confirm_bike_rental(message):
+    bot.send_message(OWNER_ID, f"🚴 Новый прокат от @{message.from_user.username}!")
+    bot.send_message(message.chat.id, "✅ Велосипед забронирован. Хозяин свяжется с вами.", reply_markup=types.ReplyKeyboardRemove())
+    start(message)
+
+# --- Еда и корзина ---
+@bot.message_handler(func=lambda m: m.text == "🍽 Еда")
+def handle_food(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("🍳 Завтрак"),
+        types.KeyboardButton("🍽 Ужин"),
+        types.KeyboardButton("🛒 Корзина"),
+        types.KeyboardButton("🔙 Назад")
+    )
+    bot.send_message(message.chat.id, "Выберите категорию:", reply_markup=markup)
+
 @bot.message_handler(func=lambda m: m.text in ["🍳 Завтрак", "🍽 Ужин"])
-def choose_meal_type(message):
+def show_food_menu(message):
     meal_type = "breakfast" if message.text == "🍳 Завтрак" else "dinner"
-    user_data[message.chat.id] = {"meal_type": meal_type}
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     for dish in FOOD_MENU[meal_type]:
         markup.add(types.KeyboardButton(dish))
     markup.add(types.KeyboardButton("🔙 Назад"))
     bot.send_message(message.chat.id, "Выберите блюдо:", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: any(m.text in dishes for dishes in [FOOD_MENU["breakfast"], FOOD_MENU["dinner"]]))
+@bot.message_handler(func=lambda m: any(m.text in FOOD_MENU["breakfast"] or m.text in FOOD_MENU["dinner"]))
 def add_to_cart(message):
-    user_id = message.chat.id
     meal_type = "breakfast" if message.text in FOOD_MENU["breakfast"] else "dinner"
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO cart VALUES (?, ?, ?)", (user_id, message.text, FOOD_MENU[meal_type][message.text]))
+    cursor.execute("INSERT INTO cart VALUES (?, ?, ?)", (message.chat.id, message.text, FOOD_MENU[meal_type][message.text]))
     conn.commit()
     conn.close()
-    bot.send_message(user_id, f"✅ {message.text} добавлено в корзину!")
+    bot.send_message(message.chat.id, f"✅ {message.text} добавлено в корзину!")
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Корзина")
 def show_cart(message):
@@ -175,28 +213,34 @@ def show_cart(message):
 
     total = sum(item[1] for item in items)
     cart_text = "🛒 Ваш заказ:\n" + "\n".join([f"- {dish}: {price}₽" for dish, price in items]) + f"\nИтого: {total}₽"
-    
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton("✅ Подтвердить заказ"), types.KeyboardButton("🔙 Назад"))
+    markup.add(
+        types.KeyboardButton("✅ Подтвердить заказ"),
+        types.KeyboardButton("🔙 Назад")
+    )
     bot.send_message(message.chat.id, cart_text, reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "✅ Подтвердить заказ")
 def confirm_cart(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton("🍳 Завтрак"), types.KeyboardButton("🍽 Ужин"), types.KeyboardButton("⏰ Другое время"))
+    markup.add(
+        types.KeyboardButton("🍳 Завтрак"),
+        types.KeyboardButton("🍽 Ужин"),
+        types.KeyboardButton("⏰ Другое время")
+    )
     bot.send_message(message.chat.id, "Выберите время доставки:", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text in ["🍳 Завтрак", "🍽 Ужин", "⏰ Другое время"])
 def handle_delivery_time(message):
     if message.text == "⏰ Другое время":
-        bot.send_message(message.chat.id, "Укажите удобное время (например, 12:00):")
+        bot.send_message(message.chat.id, "Укажите время в формате ЧЧ:ММ:")
         bot.register_next_step_handler(message, save_custom_time)
     else:
         save_order(message)
 
 def save_custom_time(message):
     if not re.match(r"^\d{2}:\d{2}$", message.text):
-        bot.send_message(message.chat.id, "❌ Некорректный формат времени. Попробуйте снова.")
+        bot.send_message(message.chat.id, "❌ Некорректный формат времени!")
         return
     save_order(message, custom_time=message.text)
 
@@ -212,7 +256,7 @@ def save_order(message, custom_time=None):
         order_text += f"\n⏰ Время: {custom_time}"
     else:
         order_text += f"\n⏰ Время: {message.text}"
-    
+
     bot.send_message(OWNER_ID, order_text)
     cursor.execute("DELETE FROM cart WHERE user_id=?", (user_id,))
     conn.commit()
@@ -223,7 +267,7 @@ def save_order(message, custom_time=None):
 def go_back(message):
     start(message)
 
-# ================= ЗАПУСК И ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ =================
+# --- Автопинг ---
 def self_ping():
     while True:
         try:
@@ -235,6 +279,7 @@ def self_ping():
 
 threading.Thread(target=self_ping, daemon=True).start()
 
+# --- Flask-роуты ---
 @app.route("/")
 def index():
     return "Bot is running!", 200
