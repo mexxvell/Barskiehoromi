@@ -1,16 +1,10 @@
 import os
 import logging
-import threading
 import requests
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+import threading
 from flask import Flask, request
+import telebot
+from telebot import types
 from waitress import serve
 
 # Настройка логирования
@@ -21,9 +15,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
-RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")  # Telegram ID владельца
+RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
 
 # Проверка переменных окружения
 if not all([TOKEN, OWNER_ID, RENDER_URL]):
@@ -50,25 +44,31 @@ FOOD_MENU = {
 
 PHOTO_PATHS = {
     "main": "photos/main_photo.jpg",
-    "room1": "photos/room1.jpg",
-    "room2": "photos/room2.jpg",
     "museum": "photos/museum_carpathian_front.jpg",
     "souvenir": "photos/souvenir_magnet.jpg"
 }
 
-# Flask-приложение для обработки вебхука
+# Flask-приложение
 app = Flask(__name__)
+bot = telebot.TeleBot(TOKEN)
+
+# Установка вебхука
+WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
+bot.remove_webhook()
+bot.set_webhook(url=WEBHOOK_URL)
 
 # ================= ОБРАБОТЧИКИ КОМАНД =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    main_keyboard = ReplyKeyboardMarkup(
-        [
-            ["🏠 О доме", "🌆 Город"],
-            ["🛎 Помощь", "Обратная связь"]
-        ],
-        resize_keyboard=True
+@bot.message_handler(commands=["start"])
+def start(message):
+    main_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    main_keyboard.add(
+        types.KeyboardButton("🏠 О доме"),
+        types.KeyboardButton("🌆 Город"),
+        types.KeyboardButton("🛎 Помощь"),
+        types.KeyboardButton("Обратная связь")
     )
-    await update.message.reply_text(
+    bot.send_message(
+        message.chat.id,
         "👋 Добро пожаловать в наш дом! 🏡\n"
         "Правила использования:\n"
         "1) Выберите раздел из меню\n"
@@ -78,343 +78,241 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "5) Они свяжутся для уточнения деталей",
         reply_markup=main_keyboard
     )
-    context.user_data["current_menu"] = "main"
 
-# Обработчик "О доме"
-async def handle_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@bot.message_handler(func=lambda m: m.text == "🏠 О доме")
+def handle_home(message):
     with open(PHOTO_PATHS["main"], "rb") as photo:
-        await update.message.reply_photo(
-            photo=photo,
+        bot.send_photo(
+            message.chat.id,
+            photo,
             caption="🏡 О доме:\n"
                     "Наш дом расположен в живописном месте. Здесь вы найдете уют и комфорт.\n"
                     "Можно заказать еду или получить помощь."
         )
-    home_submenu = ReplyKeyboardMarkup(
-        [
-            ["🍽 Еда"],
-            ["🔙 Назад"]
-        ],
-        resize_keyboard=True
-    )
-    await update.message.reply_text("Выберите нужный раздел:", reply_markup=home_submenu)
-    context.user_data["current_menu"] = "home"
+    home_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    home_submenu.add(types.KeyboardButton("🍽 Еда"), types.KeyboardButton("🔙 Назад"))
+    bot.send_message(message.chat.id, "Выберите нужный раздел:", reply_markup=home_submenu)
 
-# Обработчик "Еда"
-async def handle_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["current_menu"] = "food"
-    meal_keyboard = ReplyKeyboardMarkup(
-        [
-            ["🍳 Завтрак", "🍽 Ужин"],
-            ["🔙 Назад"]
-        ],
-        resize_keyboard=True
+@bot.message_handler(func=lambda m: m.text == "🍽 Еда")
+def handle_food(message):
+    meal_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    meal_keyboard.add(
+        types.KeyboardButton("🍳 Завтрак"),
+        types.KeyboardButton("🍽 Ужин"),
+        types.KeyboardButton("🔙 Назад")
     )
-    await update.message.reply_text(
+    bot.send_message(
+        message.chat.id,
         "🍽 Меню на завтра:\n"
         "Здесь можно заказать еду на завтрак или ужин.\n"
         "Выберите один из пунктов, и информация будет отправлена хозяевам.",
         reply_markup=meal_keyboard
     )
 
-# Обработчик выбора типа еды
-async def choose_meal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "🔙 Назад":
-        await go_back(update, context)
-        return
+@bot.message_handler(func=lambda m: m.text in ["🍳 Завтрак", "🍽 Ужин"])
+def choose_meal_type(message):
+    meal_type = "breakfast" if message.text == "🍳 Завтрак" else "dinner"
+    user_id = message.chat.id
+    bot.reply_to(message, "Выберите блюдо:", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1))
+    
+    buttons = [types.KeyboardButton(food) for food in FOOD_MENU[meal_type]]
+    buttons.append(types.KeyboardButton("🔙 Назад"))
+    bot.send_message(user_id, "Выберите блюдо:", reply_markup=types.ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True))
 
-    meal_type_map = {
-        "🍳 Завтрак": "breakfast",
-        "🍽 Ужин": "dinner"
-    }
+@bot.message_handler(func=lambda m: m.text in FOOD_MENU["breakfast"] or m.text in FOOD_MENU["dinner"])
+def choose_food(message):
+    user_id = message.chat.id
+    meal_type = "breakfast" if message.text in FOOD_MENU["breakfast"] else "dinner"
+    
+    bot.reply_to(message, "Выберите удобное время:", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1))
+    
+    buttons = [types.KeyboardButton(slot) for slot in TIME_SLOTS[meal_type]]
+    buttons.append(types.KeyboardButton("🔙 Назад"))
+    bot.send_message(user_id, "Выберите удобное время:", reply_markup=types.ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True))
 
-    meal_type = meal_type_map.get(text)
-    if not meal_type:
-        await update.message.reply_text("Неизвестный выбор. Попробуйте ещё раз.")
-        return
-
-    context.user_data["meal_type"] = meal_type
-    context.user_data["current_menu"] = "food"
-
-    menu = FOOD_MENU[meal_type]
-    buttons = [[key] for key in menu.keys()]
-    buttons.append(["🔙 Назад"])
-    keyboard = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-    await update.message.reply_text("Выберите блюдо:", reply_markup=keyboard)
-
-# Обработчик выбора блюда
-async def choose_food(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "🔙 Назад":
-        await go_back(update, context)
-        return
-
-    meal_type = context.user_data["meal_type"]
-    food_choice = next(k for k, v in FOOD_MENU[meal_type].items() if k == text)
-    context.user_data["food_choice"] = food_choice
-    context.user_data["current_menu"] = "time"
-
-    time_slots = TIME_SLOTS[meal_type]
-    buttons = [[slot] for slot in time_slots]
-    buttons.append(["🔙 Назад"])
-    keyboard = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-    await update.message.reply_text("Выберите удобное время:", reply_markup=keyboard)
-
-# Обработчик выбора времени
-async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "🔙 Назад":
-        await go_back(update, context)
-        return
-
-    time_choice = text.strip()
-    user_id = update.effective_user.id
-
-    await update.message.reply_text("✅ Ваш заказ отправлен хозяевам дома!", reply_markup=ReplyKeyboardRemove())
-
-    meal_type = context.user_data["meal_type"]
-    food = next(k for k, v in FOOD_MENU[meal_type].items() if v == context.user_data["food_choice"])
-
-    message = (
+@bot.message_handler(func=lambda m: m.text in TIME_SLOTS["breakfast"] or m.text in TIME_SLOTS["dinner"])
+def confirm_order(message):
+    user_id = message.chat.id
+    meal_type = "breakfast" if message.text in TIME_SLOTS["breakfast"] else "dinner"
+    food = next(k for k, v in FOOD_MENU[meal_type].items() if v == bot.get_user_context()[user_id].get("food_choice"))
+    
+    bot.send_message(
+        user_id,
+        "✅ Ваш заказ отправлен хозяевам дома!",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    
+    message_text = (
         f"🛎️ Новый заказ!\n"
         f"👤 Пользователь: {user_id}\n"
         f"🍽️ Тип: {meal_type.capitalize()}\n"
         f"🍲 Блюдо: {food}\n"
-        f"⏰ Время: {time_choice}"
+        f"⏰ Время: {message.text}"
     )
-    await update.effective_bot.send_message(chat_id=OWNER_ID, text=message)
+    bot.send_message(OWNER_ID, message_text)
 
-# Обработчик "Город"
-async def handle_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["current_menu"] = "city"
-    city_submenu = ReplyKeyboardMarkup(
-        [
-            ["🏛️ Достопримечательности"],
-            ["🔙 Назад"]
-        ],
-        resize_keyboard=True
-    )
-    await update.message.reply_text(
+@bot.message_handler(func=lambda m: m.text == "🌆 Город")
+def handle_city(message):
+    city_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    city_submenu.add(types.KeyboardButton("🏛️ Достопримечательности"), types.KeyboardButton("🔙 Назад"))
+    bot.send_message(
+        message.chat.id,
         "🌆 Г. Беломорск, Республика Карелия:\n"
         "Население: ~12 000 чел.\n"
         "Штаб Карельского фронта во время ВОВ находился здесь.",
         reply_markup=city_submenu
     )
 
-# Обработчик "Достопримечательности"
-async def handle_attractions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["current_menu"] = "attractions"
-    attractions_submenu = ReplyKeyboardMarkup(
-        [
-            ["🏛️ Музей Карельского фронта"],
-            ["🔙 Назад"]
-        ],
-        resize_keyboard=True
+@bot.message_handler(func=lambda m: m.text == "🏛️ Достопримечательности")
+def handle_attractions(message):
+    attractions_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    attractions_submenu.add(types.KeyboardButton("🏛️ Музей Карельского фронта"), types.KeyboardButton("🔙 Назад"))
+    bot.send_message(
+        message.chat.id,
+        "🏛️ Выберите достопримечательность:",
+        reply_markup=attractions_submenu
     )
-    await update.message.reply_text("🏛️ Выберите достопримечательность:", reply_markup=attractions_submenu)
 
-# Обработчик "Музей Карельского фронта"
-async def handle_museum(update: Update, context: ContextTypes.DEFAULT_TYPE):
+@bot.message_handler(func=lambda m: m.text == "🏛️ Музей Карельского фронта")
+def handle_museum(message):
     with open(PHOTO_PATHS["museum"], "rb") as photo:
-        await update.message.reply_photo(
-            photo=photo,
+        bot.send_photo(
+            message.chat.id,
+            photo,
             caption="🏛️ Музей Карельского фронта\n📍 Адрес: г. Беломорск, ул. Банковская, д. 26"
         )
-    await update.message.reply_text("Выберите нужный раздел:", reply_markup=ReplyKeyboardMarkup(
-        [["🏠 О доме", "🌆 Город", "Обратная связь", "🛎 Помощь"],
-         ["🔙 Назад"]],
-        resize_keyboard=True
-    ))
-
-# Обработчик "Помощь"
-async def handle_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_submenu = ReplyKeyboardMarkup(
-        [
-            ["🚖 Такси", "🏥 Больница"],
-            ["🔙 Назад"]
-        ],
-        resize_keyboard=True
+    main_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    main_keyboard.add(
+        types.KeyboardButton("🏠 О доме"),
+        types.KeyboardButton("🛍️ Сувениры"),
+        types.KeyboardButton("Обратная связь"),
+        types.KeyboardButton("🛎 Помощь")
     )
-    await update.message.reply_text(
-        "🛎️ Помощь:\n"
-        "Здесь можно найти важную информацию о городе и услугах.",
-        reply_markup=help_submenu
-    )
-    context.user_data["current_menu"] = "help"
+    bot.send_message(message.chat.id, "Выберите нужный раздел:", reply_markup=main_keyboard)
 
-# Обработчик "Такси"
-async def handle_taxi(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🚖 Такси:\n"
-        "Телефон такси: +7-999-999-99-99",
-        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+@bot.message_handler(func=lambda m: m.text == "🛍️ Сувениры")
+def handle_souvenirs(message):
+    souvenir_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    souvenir_submenu.add(types.KeyboardButton("🧲 Магнит на холодильник"), types.KeyboardButton("🔙 Назад"))
+    bot.send_message(
+        message.chat.id,
+        "🛍️ Сувениры:",
+        reply_markup=souvenir_submenu
     )
 
-# Обработчик "Больница"
-async def handle_hospital(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🏥 Больница:\n"
-        "Адрес: г. Беломорск, ул. Больничная, д. 1",
-        reply_markup=ReplyKeyboardMarkup([["🔙 Назад"]], resize_keyboard=True)
+@bot.message_handler(func=lambda m: m.text == "🧲 Магнит на холодильник")
+def handle_magnet(message):
+    with open(PHOTO_PATHS["souvenir"], "rb") as photo:
+        bot.send_photo(
+            message.chat.id,
+            photo,
+            caption="🧲 Магнит на холодильник (50 гр) - 100р"
+        )
+    main_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    main_keyboard.add(
+        types.KeyboardButton("🏠 О доме"),
+        types.KeyboardButton("🛍️ Сувениры"),
+        types.KeyboardButton("Обратная связь"),
+        types.KeyboardButton("🛎 Помощь")
     )
+    bot.send_message(message.chat.id, "Выберите нужный раздел:", reply_markup=main_keyboard)
 
-# Обработчик "Обратная связь"
-async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["current_menu"] = "feedback"
-    await update.message.reply_text(
+@bot.message_handler(func=lambda m: m.text == "Обратная связь")
+def handle_feedback(message):
+    bot.send_message(
+        message.chat.id,
         "💬 Здесь можно оставить обратную связь:\n"
         "Расскажите, что можно улучшить или что доставило дискомфорт.\n"
         "Напишите ваше сообщение и нажмите '✅ Отправить'."
     )
+    bot.register_next_step_handler(message, send_feedback)
 
-# Обработчик отправки обратной связи
-async def send_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "current_menu" not in context.user_data or context.user_data["current_menu"] != "feedback":
-        await update.message.reply_text("❌ Сначала выберите 'Обратная связь'.")
-        return
+@bot.message_handler(func=lambda m: m.text == "✅ Отправить")
+def send_feedback(message):
+    user_message = message.text
+    message_text = f"📬 Новая обратная связь:\n{user_message}"
+    bot.send_message(OWNER_ID, message_text)
+    bot.send_message(
+        message.chat.id,
+        "✅ Сообщение отправлено хозяевам!",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
 
-    user_message = update.message.text
-    message = f"📬 Новая обратная связь:\n{user_message}"
-    await update.effective_bot.send_message(chat_id=OWNER_ID, text=message)
-    await update.message.reply_text("✅ Сообщение отправлено хозяевам!", reply_markup=ReplyKeyboardRemove())
+@bot.message_handler(func=lambda m: m.text == "🛎 Помощь")
+def handle_help(message):
+    help_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    help_submenu.add(
+        types.KeyboardButton("🚖 Такси"),
+        types.KeyboardButton("🏥 Больница"),
+        types.KeyboardButton("🔙 Назад")
+    )
+    bot.send_message(
+        message.chat.id,
+        "🛎️ Помощь:\n"
+        "Здесь можно найти важную информацию о городе и услугах.",
+        reply_markup=help_submenu
+    )
 
-# Обработчик кнопки "Назад"
-async def go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    current_menu = context.user_data.get("current_menu", "main")
-    if current_menu == "main":
-        return
+@bot.message_handler(func=lambda m: m.text == "🚖 Такси")
+def handle_taxi(message):
+    bot.send_message(
+        message.chat.id,
+        "🚖 Такси:\n"
+        "Телефон такси: +7-999-999-99-99",
+        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[[types.KeyboardButton("🔙 Назад")]])
+    )
 
-    if current_menu == "home":
-        main_keyboard = ReplyKeyboardMarkup(
-            [
-                ["🏠 О доме", "🌆 Город"],
-                ["🛎 Помощь", "Обратная связь"]
-            ],
-            resize_keyboard=True
-        )
-        await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
-    elif current_menu == "city":
-        city_submenu = ReplyKeyboardMarkup(
-            [
-                ["🌆 Город", "🏠 О доме"],
-                ["Обратная связь", "🛎 Помощь"]
-            ],
-            resize_keyboard=True
-        )
-        await update.message.reply_text("🌆 Город:", reply_markup=city_submenu)
-    elif current_menu == "food":
-        meal_submenu = ReplyKeyboardMarkup(
-            [
-                ["🍳 Завтрак", "🍽 Ужин"],
-                ["🔙 Назад"]
-            ],
-            resize_keyboard=True
-        )
-        await update.message.reply_text("Выберите, что бы вы хотели:", reply_markup=meal_submenu)
-    elif current_menu == "time":
-        meal_type = context.user_data["meal_type"]
-        menu = FOOD_MENU[meal_type]
-        buttons = [[key] for key in menu.keys()]
-        buttons.append(["🔙 Назад"])
-        keyboard = ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-        await update.message.reply_text("Выберите блюдо:", reply_markup=keyboard)
-    elif current_menu == "help":
-        help_submenu = ReplyKeyboardMarkup(
-            [
-                ["🚖 Такси", "🏥 Больница"],
-                ["🔙 Назад"]
-            ],
-            resize_keyboard=True
-        )
-        await update.message.reply_text("🛎️ Помощь:", reply_markup=help_submenu)
-    elif current_menu == "feedback":
-        main_keyboard = ReplyKeyboardMarkup(
-            [
-                ["🏠 О доме", "🌆 Город"],
-                ["🛎 Помощь", "Обратная связь"]
-            ],
-            resize_keyboard=True
-        )
-        await update.message.reply_text("Выберите нужный раздел:", reply_markup=main_keyboard)
-        context.user_data["current_menu"] = "main"
+@bot.message_handler(func=lambda m: m.text == "🏥 Больница")
+def handle_hospital(message):
+    bot.send_message(
+        message.chat.id,
+        "🏥 Больница:\n"
+        "Адрес: г. Беломорск, ул. Больничная, д. 1",
+        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[[types.KeyboardButton("🔙 Назад")]])
+    )
 
-    context.user_data["current_menu"] = "main"
+@bot.message_handler(func=lambda m: m.text == "🔙 Назад")
+def go_back(message):
+    main_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    main_keyboard.add(
+        types.KeyboardButton("🏠 О доме"),
+        types.KeyboardButton("🌆 Город"),
+        types.KeyboardButton("🛍️ Сувениры"),
+        types.KeyboardButton("Обратная связь"),
+        types.KeyboardButton("🛎 Помощь")
+    )
+    bot.send_message(message.chat.id, "Выберите нужный раздел:", reply_markup=main_keyboard)
 
-# Flask-маршрут для поддержания активности
+# ================= ФЛЭШ-МАРШРУТЫ =================
+@app.route("/")
+def index():
+    return "Telegram-бот работает!", 200
+
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = types.Update.de_json(request.get_data(as_text=True))
+    bot.process_new_updates([update])
+    return "", 200
+
 @app.route("/ping")
 def ping():
     return "OK", 200
 
-# Flask-маршрут для вебхука
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    from telegram import Update
-    from telegram.ext import Dispatcher
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    Dispatcher(application.dispatcher, update, application.bot).process_update(update)
-    return "", 200
-
 # ================= ЗАПУСК СЕРВИСА =================
-def main():
-    global application
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    # Регистрация обработчиков
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Regex(r"^🏠 О доме$"), handle_home))
-    application.add_handler(MessageHandler(filters.Regex(r"^🍽 Еда$"), handle_food))
-    application.add_handler(MessageHandler(filters.Regex(r"^🍳 Завтрак$|^🍽 Ужин$"), choose_meal_type))
-    application.add_handler(MessageHandler(filters.Regex(r"^ pancakes|omelette|tea|soup1|soup2|meat_puree$"), choose_food))
-    application.add_handler(MessageHandler(filters.Regex(r"^\d{2}:\d{2}$"), confirm_order))
-    application.add_handler(MessageHandler(filters.Regex(r"^🌆 Город$"), handle_city))
-    application.add_handler(MessageHandler(filters.Regex(r"^🏛️ Достопримечательности$"), handle_attractions))
-    application.add_handler(MessageHandler(filters.Regex(r"^🏛️ Музей Карельского фронта$"), handle_museum))
-    application.add_handler(MessageHandler(filters.Regex(r"^Обратная связь$"), handle_feedback))
-    application.add_handler(MessageHandler(filters.Regex(r"^✅ Отправить$"), send_feedback))
-    application.add_handler(MessageHandler(filters.Regex(r"^🛎 Помощь$"), handle_help))
-    application.add_handler(MessageHandler(filters.Regex(r"^🚖 Такси$"), handle_taxi))
-    application.add_handler(MessageHandler(filters.Regex(r"^🏥 Больница$"), handle_hospital))
-    application.add_handler(MessageHandler(filters.Regex(r"^🔙 Назад$"), go_back))
-
-    # Установка вебхука
-    PORT = int(os.getenv("PORT", 8000))  # Используем порт 8000
-    WEBHOOK_URL = f"{RENDER_URL}/webhook"
-
-    try:
-        application.bot.delete_webhook()
-        logger.info("Старый вебхук удален")
-    except Exception as e:
-        logger.warning(f"Ошибка при удалении вебхука: {e}")
-
-    try:
-        logger.info(f"Настройка вебхука на URL: {WEBHOOK_URL}")
-        application.bot.set_webhook(url=WEBHOOK_URL)
-    except Exception as e:
-        logger.error(f"Ошибка установки вебхука: {e}")
-        return
-
-    # Запуск Flask-сервера
-    serve(app, host="0.0.0.0", port=PORT)
-
-# Автопинг каждые 5 минут
 def self_ping():
     while True:
-        url = os.getenv("RENDER_URL")
-        if not url:
-            logger.error("RENDER_URL не задан")
-            threading.Event().wait(300)
-            continue
-
         try:
-            response = requests.get(url)
+            response = requests.get(f"{RENDER_URL}/ping")
             logger.info(f"Self-ping: Status {response.status_code}")
         except Exception as e:
             logger.error(f"Ошибка self-ping: {str(e)}")
         threading.Event().wait(300)
 
 if __name__ == "__main__":
-    main()
-
-    # Запуск автопинга в отдельном потоке
+    # Запуск Flask-сервера
+    PORT = int(os.getenv("PORT", 8000))
+    serve(app, host="0.0.0.0", port=PORT)
+    
+    # Запуск автопинга
     ping_thread = threading.Thread(target=self_ping, daemon=True)
     ping_thread.start()
