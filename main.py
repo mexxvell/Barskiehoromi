@@ -48,18 +48,14 @@ init_db()
 # --- Меню ---
 FOOD_MENU = {
     "breakfast": {
-        "Яичница (150г)": 500,
-        "Кофе": 200,
-        "Блины (180г)": 450,
-        "Творожная запеканка (200г)": 450,
-        "Сырники (180г)": 400
+        "Яичница (150г)": {"price": 500, "photo": "egg.jpg"},
+        "Кофе": {"price": 200, "photo": None},
+        "Блины (180г)": {"price": 450, "photo": "pancake.jpg"}
     },
     "dinner": {
-        "Суп (300г)": 350,
-        "Рыба (250г)": 600,
-        "Чай": 150,
-        "Гречка с грибами (250г)": 350,
-        "Курица-гриль (300г)": 600
+        "Суп (300г)": {"price": 350, "photo": "soup.jpg"},
+        "Рыба (250г)": {"price": 600, "photo": "fish.jpg"},
+        "Чай": {"price": 150, "photo": None}
     }
 }
 
@@ -122,6 +118,25 @@ def handle_city(message):
         reply_markup=markup
     )
 
+# Обработчики для кнопок "Музей", "Такси", "Больница"
+@bot.message_handler(func=lambda m: m.text == "🏛️ Музей Карельского фронта")
+def handle_museum(message):
+    with open("photos/museum.jpg", "rb") as photo:
+        bot.send_photo(
+            message.chat.id,
+            photo,
+            caption="🏛️ Музей Карельского фронта\n📍 Адрес: ул. Банковская, 26"
+        )
+    start(message)
+
+@bot.message_handler(func=lambda m: m.text == "🚖 Такси")
+def handle_taxi(message):
+    bot.send_message(message.chat.id, "🚖 Телефон такси: +7-999-999-99-99")
+
+@bot.message_handler(func=lambda m: m.text == "🏥 Больница")
+def handle_hospital(message):
+    bot.send_message(message.chat.id, "🏥 Адрес больницы: ул. Больничная, 1")
+
 @bot.message_handler(func=lambda m: m.text == "🛍️ Сувениры")
 def handle_souvenirs(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -130,6 +145,16 @@ def handle_souvenirs(message):
         types.KeyboardButton("🔙 Назад")
     )
     bot.send_message(message.chat.id, "🛍️ Сувениры:", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text == "🧲 Магнит на холодильник")
+def handle_magnet(message):
+    with open("photos/magnet.jpg", "rb") as photo:
+        bot.send_photo(
+            message.chat.id,
+            photo,
+            caption="🧲 Магнит на холодильник - 100₽"
+        )
+    start(message)
 
 @bot.message_handler(func=lambda m: m.text == "Обратная связь")
 def handle_feedback(message):
@@ -155,12 +180,13 @@ def bike_rental(message):
 def show_bike_details(message):
     try:
         bike = BIKE_MENU[message.text]
-        with open(f"photos/{bike['photo']}", "rb") as photo:
-            bot.send_photo(
-                message.chat.id,
-                photo,
-                caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
-            )
+        if bike["photo"]:
+            with open(f"photos/{bike['photo']}", "rb") as photo:
+                bot.send_photo(
+                    message.chat.id,
+                    photo,
+                    caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
+                )
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add(
             types.KeyboardButton("✅ Хочу кататься!"),
@@ -169,7 +195,6 @@ def show_bike_details(message):
         bot.send_message(message.chat.id, "Забронировать?", reply_markup=markup)
     except Exception as e:
         logger.error(f"Ошибка при загрузке велосипеда: {e}")
-        bot.send_message(message.chat.id, "❌ Ошибка загрузки данных.")
 
 @bot.message_handler(func=lambda m: m.text == "✅ Хочу кататься!")
 def confirm_bike_rental(message):
@@ -201,15 +226,36 @@ def show_food_menu(message):
 @bot.message_handler(func=lambda m: any(m.text in FOOD_MENU["breakfast"] or m.text in FOOD_MENU["dinner"]))
 def add_to_cart(message):
     meal_type = "breakfast" if message.text in FOOD_MENU["breakfast"] else "dinner"
-    conn = sqlite3.connect('bot_data.db')
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO cart (user_id, dish, meal_type, price) VALUES (?, ?, ?, ?)",
-        (message.chat.id, message.text, meal_type, FOOD_MENU[meal_type][message.text])
+    dish_info = FOOD_MENU[meal_type][message.text]
+    
+    # Отправка фото (если есть)
+    if dish_info["photo"]:
+        try:
+            with open(f"photos/{dish_info['photo']}", "rb") as photo:
+                bot.send_photo(message.chat.id, photo)
+        except:
+            logger.error(f"Фото для {message.text} не найдено")
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(
+        types.KeyboardButton("✅ Добавить в корзину"),
+        types.KeyboardButton("🔙 Назад")
     )
-    conn.commit()
-    conn.close()
-    bot.send_message(message.chat.id, f"✅ {message.text} ({meal_type.capitalize()}) добавлено в корзину!")
+    bot.send_message(message.chat.id, f"{message.text} - {dish_info['price']}₽", reply_markup=markup)
+    bot.register_next_step_handler(message, lambda m: confirm_add_to_cart(m, meal_type, message.text))
+
+def confirm_add_to_cart(message, meal_type, dish):
+    if message.text == "✅ Добавить в корзину":
+        conn = sqlite3.connect('bot_data.db')
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO cart (user_id, dish, meal_type, price) VALUES (?, ?, ?, ?)",
+            (message.chat.id, dish, meal_type, FOOD_MENU[meal_type][dish]["price"])
+        )
+        conn.commit()
+        conn.close()
+        bot.send_message(message.chat.id, f"✅ {dish} добавлено в корзину!")
+    start(message)
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Корзина")
 def show_cart(message):
