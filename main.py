@@ -29,6 +29,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS cart (
             user_id INTEGER,
             dish TEXT,
+            meal_type TEXT,
             price INTEGER
         )
     ''')
@@ -49,12 +50,16 @@ FOOD_MENU = {
     "breakfast": {
         "Яичница (150г)": 500,
         "Кофе": 200,
-        "Блины (180г)": 450
+        "Блины (180г)": 450,
+        "Творожная запеканка (200г)": 450,
+        "Сырники (180г)": 400
     },
     "dinner": {
         "Суп (300г)": 350,
         "Рыба (250г)": 600,
-        "Чай": 150
+        "Чай": 150,
+        "Гречка с грибами (250г)": 350,
+        "Курица-гриль (300г)": 600
     }
 }
 
@@ -148,19 +153,23 @@ def bike_rental(message):
 
 @bot.message_handler(func=lambda m: m.text in ["Велосипед 1", "Велосипед 2"])
 def show_bike_details(message):
-    bike = BIKE_MENU[message.text]
-    with open(f"photos/{bike['photo']}", "rb") as photo:
-        bot.send_photo(
-            message.chat.id,
-            photo,
-            caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
+    try:
+        bike = BIKE_MENU[message.text]
+        with open(f"photos/{bike['photo']}", "rb") as photo:
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
+            )
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(
+            types.KeyboardButton("✅ Хочу кататься!"),
+            types.KeyboardButton("🔙 Назад")
         )
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(
-        types.KeyboardButton("✅ Хочу кататься!"),
-        types.KeyboardButton("🔙 Назад")
-    )
-    bot.send_message(message.chat.id, "Забронировать?", reply_markup=markup)
+        bot.send_message(message.chat.id, "Забронировать?", reply_markup=markup)
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке велосипеда: {e}")
+        bot.send_message(message.chat.id, "❌ Ошибка загрузки данных.")
 
 @bot.message_handler(func=lambda m: m.text == "✅ Хочу кататься!")
 def confirm_bike_rental(message):
@@ -194,16 +203,19 @@ def add_to_cart(message):
     meal_type = "breakfast" if message.text in FOOD_MENU["breakfast"] else "dinner"
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO cart VALUES (?, ?, ?)", (message.chat.id, message.text, FOOD_MENU[meal_type][message.text]))
+    cursor.execute(
+        "INSERT INTO cart (user_id, dish, meal_type, price) VALUES (?, ?, ?, ?)",
+        (message.chat.id, message.text, meal_type, FOOD_MENU[meal_type][message.text])
+    )
     conn.commit()
     conn.close()
-    bot.send_message(message.chat.id, f"✅ {message.text} добавлено в корзину!")
+    bot.send_message(message.chat.id, f"✅ {message.text} ({meal_type.capitalize()}) добавлено в корзину!")
 
 @bot.message_handler(func=lambda m: m.text == "🛒 Корзина")
 def show_cart(message):
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT dish, price FROM cart WHERE user_id=?", (message.chat.id,))
+    cursor.execute("SELECT dish, meal_type, price FROM cart WHERE user_id=?", (message.chat.id,))
     items = cursor.fetchall()
     conn.close()
 
@@ -211,8 +223,8 @@ def show_cart(message):
         bot.send_message(message.chat.id, "Корзина пуста.")
         return
 
-    total = sum(item[1] for item in items)
-    cart_text = "🛒 Ваш заказ:\n" + "\n".join([f"- {dish}: {price}₽" for dish, price in items]) + f"\nИтого: {total}₽"
+    total = sum(item[2] for item in items)
+    cart_text = "🛒 Ваш заказ:\n" + "\n".join([f"- {dish} ({meal_type}): {price}₽" for dish, meal_type, price in items]) + f"\nИтого: {total}₽"
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(
         types.KeyboardButton("✅ Подтвердить заказ"),
@@ -248,14 +260,17 @@ def save_order(message, custom_time=None):
     user_id = message.chat.id
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT dish FROM cart WHERE user_id=?", (user_id,))
-    dishes = [item[0] for item in cursor.fetchall()]
-    order_text = f"Новый заказ от @{message.from_user.username}:\n" + "\n".join(dishes)
+    cursor.execute("SELECT dish, meal_type FROM cart WHERE user_id=?", (user_id,))
+    items = cursor.fetchall()
+    
+    order_text = f"Новый заказ от @{message.from_user.username}:\n"
+    for dish, meal_type in items:
+        order_text += f"- {dish} ({meal_type.capitalize()})\n"
     
     if custom_time:
-        order_text += f"\n⏰ Время: {custom_time}"
+        order_text += f"⏰ Время: {custom_time}"
     else:
-        order_text += f"\n⏰ Время: {message.text}"
+        order_text += f"⏰ Время: {message.text}"
 
     bot.send_message(OWNER_ID, order_text)
     cursor.execute("DELETE FROM cart WHERE user_id=?", (user_id,))
