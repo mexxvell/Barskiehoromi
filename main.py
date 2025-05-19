@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import logging
 import threading
@@ -76,6 +77,31 @@ WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
 
+# ================= ОСНОВНЫЕ ОБРАБОТЧИКИ =================
+user_data = {}
+
+@bot.message_handler(commands=["start"])
+def start(message):
+    main_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    main_keyboard.add(
+        types.KeyboardButton("🏠 О доме"),
+        types.KeyboardButton("🌆 Город"),
+        types.KeyboardButton("🛍️ Сувениры"),
+        types.KeyboardButton("Обратная связь")
+    )
+    try:
+        bot.send_message(
+            message.chat.id,
+            "👋 Добро пожаловать в наш дом! 🏡\nВыберите раздел:",
+            reply_markup=main_keyboard
+        )
+    except Exception as e:
+        logger.error(f"Ошибка в start: {e}")
+
+@bot.message_handler(func=lambda m: m.text == "🔙 Назад")
+def go_back(message):
+    start(message)
+
 # ================= КОРЗИНА =================
 @bot.message_handler(func=lambda m: m.text == "🛒 Корзина")
 def show_cart(message):
@@ -129,7 +155,11 @@ def save_order(message, custom_time=None):
     else:
         order_text += f"\n⏰ Время: {message.text}"
     
-    bot.send_message(OWNER_ID, order_text)
+    try:
+        bot.send_message(OWNER_ID, order_text)
+    except Exception as e:
+        logger.error(f"Ошибка отправки заказа владельцу: {e}")
+    
     cursor.execute("DELETE FROM cart WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
@@ -145,12 +175,16 @@ def bike_rental(message):
 @bot.message_handler(func=lambda m: m.text in ["Велосипед 1", "Велосипед 2"])
 def show_bike_details(message):
     bike = BIKE_MENU[message.text]
-    with open(f"photos/{bike['photo']}", "rb") as photo:
-        bot.send_photo(
-            message.chat.id,
-            photo,
-            caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
-        )
+    try:
+        with open(f"photos/{bike['photo']}", "rb") as photo:
+            bot.send_photo(
+                message.chat.id,
+                photo,
+                caption=f"🚲 {message.text}\nЦены:\n- 1 час: {bike['price_hour']}₽\n- Целый день: {bike['price_day']}₽"
+            )
+    except FileNotFoundError:
+        bot.send_message(message.chat.id, "❌ Фото велосипеда временно недоступно.")
+    
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton("✅ Хочу кататься!"), types.KeyboardButton("🔙 Назад"))
     bot.send_message(message.chat.id, "Забронировать?", reply_markup=markup)
@@ -164,12 +198,12 @@ def confirm_bike_rental(message):
             "✅ Велосипед забронирован. Хозяин свяжется с вами.",
             reply_markup=types.ReplyKeyboardRemove()
         )
-        start(message)  # Важно: возврат в главное меню
+        start(message)
     except Exception as e:
         logger.error(f"Ошибка при бронировании: {e}")
         bot.send_message(message.chat.id, "❌ Произошла ошибка. Попробуйте позже.")
 
-# ================= ОБНОВЛЕНИЕ МЕНЮ =================
+# ================= МЕНЮ ЕДЫ =================
 @bot.message_handler(func=lambda m: m.text == "🏠 О доме")
 def handle_home(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -191,11 +225,12 @@ def show_food_menu(message):
     markup.add(types.KeyboardButton("🛒 Корзина"), types.KeyboardButton("🔙 Назад"))
     bot.send_message(message.chat.id, "Выберите блюдо:", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: any(m.text in dishes for dishes in FOOD_MENU.values()))
+@bot.message_handler(func=lambda m: any(m.text in dishes for dishes in [FOOD_MENU["breakfast"], FOOD_MENU["dinner"]]))
 def add_to_cart(message):
+    meal_type = "breakfast" if message.text in FOOD_MENU["breakfast"] else "dinner"
     conn = sqlite3.connect('bot_data.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO cart VALUES (?, ?, ?)", (message.chat.id, message.text, FOOD_MENU["breakfast" if "Завтрак" in message.text else "dinner"][message.text]))
+    cursor.execute("INSERT INTO cart VALUES (?, ?, ?)", (message.chat.id, message.text, FOOD_MENU[meal_type][message.text]))
     conn.commit()
     conn.close()
     bot.send_message(message.chat.id, f"✅ {message.text} добавлено в корзину!")
