@@ -14,9 +14,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
-RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")  # Telegram ID владельца
+RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
 
 # Проверка переменных окружения
 if not all([TOKEN, OWNER_ID, RENDER_URL]):
@@ -26,7 +26,7 @@ if not all([TOKEN, OWNER_ID, RENDER_URL]):
 app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN)
 
-# Установка вебхука
+# Установка вебхука (программно)
 WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
@@ -119,8 +119,8 @@ def confirm_order(message):
         f"🛎️ Новый заказ!\n"
         f"👤 Пользователь: {user_id}\n"
         f"🍽️ Тип: {meal_type.capitalize()}\n"
-        f"🍲 Блюдо: {food}\n"
-        f"⏰ Время: {message.text}"
+        "🍲 Блюдо: {food}\n"
+        "⏰ Время: {message.text}"
     )
     bot.send_message(OWNER_ID, message_text)
 
