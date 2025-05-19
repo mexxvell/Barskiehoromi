@@ -1,8 +1,8 @@
 import os
 import logging
-import requests
 import threading
-from flask import Flask, request
+import requests
+from flask import Flask, request, send_file
 import telebot
 from telebot import types
 
@@ -14,40 +14,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Константы
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-OWNER_ID = os.getenv('OWNER_TELEGRAM_ID')  # Telegram ID владельца
-RENDER_URL = os.getenv('RENDER_URL', 'https://barskiehoromi.onrender.com ')
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_TELEGRAM_ID")  # Telegram ID владельца
+RENDER_URL = os.getenv("RENDER_URL", "https://barskiehoromi.onrender.com ")
 
 # Проверка переменных окружения
 if not all([TOKEN, OWNER_ID, RENDER_URL]):
     raise EnvironmentError("Не заданы обязательные переменные окружения!")
 
-# Конфигурации
-TIME_SLOTS = {
-    "breakfast": ["08:00", "09:00", "10:00"],
-    "dinner": ["18:00", "19:00", "20:00"]
-}
-
-FOOD_MENU = {
-    "breakfast": {
-        "🥞 Яичница": "omelette",
-        "🧇 Блины": "pancakes",
-        "🍵 Чай": "tea"
-    },
-    "dinner": {
-        "🍲 Суп 1": "soup1",
-        "🍲 Суп 2": "soup2",
-        "🍖 Пюре с мясом": "meat_puree"
-    }
-}
-
-PHOTO_PATHS = {
-    "main": "photos/main_photo.jpg",
-    "museum": "photos/museum_carpathian_front.jpg",
-    "souvenir": "photos/souvenir_magnet.jpg"
-}
-
-# Flask-приложение
+# Флэш-приложение
 app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN)
 
@@ -80,17 +55,13 @@ def start(message):
 
 @bot.message_handler(func=lambda m: m.text == "🏠 О доме")
 def handle_home(message):
-    with open(PHOTO_PATHS["main"], "rb") as photo:
-        bot.send_photo(
-            message.chat.id,
-            photo,
-            caption="🏡 О доме:\n"
-                    "Наш дом расположен в живописном месте. Здесь вы найдете уют и комфорт.\n"
-                    "Можно заказать еду или получить помощь."
-        )
-    home_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    home_submenu.add(types.KeyboardButton("🍽 Еда"), types.KeyboardButton("🔙 Назад"))
-    bot.send_message(message.chat.id, "Выберите нужный раздел:", reply_markup=home_submenu)
+    bot.send_message(
+        message.chat.id,
+        "🏡 О доме:\n"
+        "Наш дом расположен в живописном месте. Здесь вы найдете уют и комфорт.\n"
+        "Можно заказать еду или получить помощь.",
+        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[[types.KeyboardButton("🍽 Еда"), types.KeyboardButton("🔙 Назад")]])
+    )
 
 @bot.message_handler(func=lambda m: m.text == "🍽 Еда")
 def handle_food(message):
@@ -111,36 +82,30 @@ def handle_food(message):
 @bot.message_handler(func=lambda m: m.text in ["🍳 Завтрак", "🍽 Ужин"])
 def choose_meal_type(message):
     meal_type = "breakfast" if message.text == "🍳 Завтрак" else "dinner"
-    user_id = message.chat.id
-    bot.reply_to(message, "Выберите блюдо:", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1))
-    
     buttons = [types.KeyboardButton(food) for food in FOOD_MENU[meal_type]]
     buttons.append(types.KeyboardButton("🔙 Назад"))
-    bot.send_message(user_id, "Выберите блюдо:", reply_markup=types.ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True))
+    bot.send_message(message.chat.id, "Выберите блюдо:", reply_markup=types.ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True))
 
 @bot.message_handler(func=lambda m: m.text in FOOD_MENU["breakfast"] or m.text in FOOD_MENU["dinner"])
 def choose_food(message):
-    user_id = message.chat.id
     meal_type = "breakfast" if message.text in FOOD_MENU["breakfast"] else "dinner"
-    
-    bot.reply_to(message, "Выберите удобное время:", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1))
-    
-    buttons = [types.KeyboardButton(slot) for slot in TIME_SLOTS[meal_type]]
+    time_slots = TIME_SLOTS[meal_type]
+    buttons = [types.KeyboardButton(slot) for slot in time_slots]
     buttons.append(types.KeyboardButton("🔙 Назад"))
-    bot.send_message(user_id, "Выберите удобное время:", reply_markup=types.ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True))
+    bot.send_message(message.chat.id, "Выберите удобное время:", reply_markup=types.ReplyKeyboardMarkup(keyboard=[buttons], resize_keyboard=True))
 
 @bot.message_handler(func=lambda m: m.text in TIME_SLOTS["breakfast"] or m.text in TIME_SLOTS["dinner"])
 def confirm_order(message):
     user_id = message.chat.id
     meal_type = "breakfast" if message.text in TIME_SLOTS["breakfast"] else "dinner"
-    food = next(k for k, v in FOOD_MENU[meal_type].items() if v == message.text)
-    
+    food = next(k for k, v in FOOD_MENU[meal_type].items() if k == message.text)
+
     bot.send_message(
         user_id,
         "✅ Ваш заказ отправлен хозяевам дома!",
         reply_markup=types.ReplyKeyboardRemove()
     )
-    
+
     message_text = (
         f"🛎️ Новый заказ!\n"
         f"👤 Пользователь: {user_id}\n"
@@ -160,16 +125,6 @@ def handle_city(message):
         "Население: ~12 000 чел.\n"
         "Штаб Карельского фронта во время ВОВ находился здесь.",
         reply_markup=city_submenu
-    )
-
-@bot.message_handler(func=lambda m: m.text == "🏛️ Достопримечательности")
-def handle_attractions(message):
-    attractions_submenu = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    attractions_submenu.add(types.KeyboardButton("🏛️ Музей Карельского фронта"), types.KeyboardButton("🔙 Назад"))
-    bot.send_message(
-        message.chat.id,
-        "🏛️ Выберите достопримечательность:",
-        reply_markup=attractions_submenu
     )
 
 @bot.message_handler(func=lambda m: m.text == "🏛️ Музей Карельского фронта")
@@ -253,21 +208,18 @@ def go_back(message):
 def index():
     return "Telegram-бот работает!", 200
 
-@app.route(f"/{TOKEN}", methods=["POST"])
+@app.route(f"/{TOKEN}", methods=["POST", "HEAD"])
 def webhook():
-    update = types.Update.de_json(request.get_data(as_text=True))
-    bot.process_new_updates([update])
+    if request.method == "POST":
+        update = types.Update.de_json(request.get_data(as_text=True))
+        bot.process_new_updates([update])
     return "", 200
-
-@app.route("/ping")
-def ping():
-    return "OK", 200
 
 # ================= ЗАПУСК СЕРВИСА =================
 def self_ping():
     while True:
         try:
-            response = requests.get(f"{RENDER_URL}/ping")
+            response = requests.get(RENDER_URL)
             logger.info(f"Self-ping: Status {response.status_code}")
         except Exception as e:
             logger.error(f"Ошибка self-ping: {str(e)}")
@@ -275,7 +227,7 @@ def self_ping():
 
 if __name__ == "__main__":
     # Запуск Flask-сервера
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8000))  # Используйте порт, который назначает Render
     app.run(host="0.0.0.0", port=port)
     
     # Запуск автопинга
