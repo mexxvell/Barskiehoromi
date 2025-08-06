@@ -52,9 +52,9 @@ app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN)
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
-# --- Словарь товаров мерча (название: (цена, файл фото)) ---
+# --- Словарь товаров мерча (название: (цена, файл фото или список фото)) ---
 MERCH_ITEMS = {
-    "🛒 Шоперы":   (500, "shopper.jpg"),
+    "🛒 Сумка Шоппер":   (500, ["shopper.jpg", "shopper1.jpg"]),
     "☕ Кружки":    (300, "mug.jpg"),
     "👕 Футболки":  (800, "tshirt.jpg")
 }
@@ -230,11 +230,33 @@ def merch_menu(message):
 def show_merch_item(message):
     name = message.text
     price, photo_file = MERCH_ITEMS[name]
-    try:
-        with open(f"photos/{photo_file}", "rb") as photo:
-            bot.send_photo(message.chat.id, photo, caption=f"{name[2:]} — {price}₽")
-    except:
-        bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
+    
+    # Если это список фото (для Сумка Шоппер)
+    if isinstance(photo_file, list):
+        media = []
+        for i, file in enumerate(photo_file):
+            try:
+                with open(f"photos/{file}", "rb") as photo:
+                    if i == 0:  # Для первого фото добавляем описание
+                        media.append(types.InputMediaPhoto(photo, caption=f"{name[2:]} — {price}₽"))
+                    else:
+                        media.append(types.InputMediaPhoto(photo))
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке фото {file}: {e}")
+        
+        if media:
+            bot.send_media_group(message.chat.id, media)
+        else:
+            bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
+    # Если это одиночное фото (для других товаров)
+    else:
+        try:
+            with open(f"photos/{photo_file}", "rb") as photo:
+                bot.send_photo(message.chat.id, photo, caption=f"{name[2:]} — {price}₽")
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке фото: {e}")
+            bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
+    
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("✅ Заказать", "🔙 Назад к Мерч")
     msg = bot.send_message(message.chat.id, "Выберите действие:", reply_markup=kb)
