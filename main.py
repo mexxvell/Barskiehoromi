@@ -127,25 +127,25 @@ def start(message):
                 "🎁 Доп. услуги — всё для вашего комфорта", reply_markup=kb)
 
 # --- Разделы ---
-@bot.message_handler(func=lambda m: m.text == "1️⃣ Путешествия")
+@bot.message_handler(func=lambda m: m.text == "🌍 Путешествия")
 def travels_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("📂 Архив путешествий", "🌍 Где мы сейчас", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "✈️ Путешествия: архив и текущее местоположение.", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == "2️⃣ Кундалини-йога")
+@bot.message_handler(func=lambda m: m.text == "🧘 Кундалини-йога")
 def yoga_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🏢 Офлайн-мероприятия", "💻 Онлайн-йога", "📅 Ближайшие мероприятия", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🧘 Кундалини-йога: офлайн, онлайн и ближайшие события.", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == "3️⃣ Медиа")
+@bot.message_handler(func=lambda m: m.text == "📸 Медиа")
 def media_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("▶️ YouTube", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🎥 Медиа: наши видео на YouTube.", reply_markup=kb)
 
-@bot.message_handler(func=lambda m: m.text == "5️⃣ Доп. услуги")
+@bot.message_handler(func=lambda m: m.text == "🎁 Доп. услуги")
 def services_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🔙 Назад к меню")
@@ -181,7 +181,7 @@ def back_to_menu(message):
     start(message)
 
 # --- Мерч ---
-@bot.message_handler(func=lambda m: m.text == "4️⃣ Мерч")
+@bot.message_handler(func=lambda m: m.text == "🛍 Мерч")
 def merch_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     for name in MERCH_ITEMS:
@@ -275,6 +275,7 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
 
 
 
