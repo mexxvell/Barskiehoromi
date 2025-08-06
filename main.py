@@ -249,13 +249,21 @@ def show_merch_item(message):
             file_path = f"photos/{file}"
             if os.path.exists(file_path):
                 try:
-                    with open(file_path, "rb") as photo:
-                        if i == 0:  # Для первого фото добавляем описание
-                            media.append(types.InputMediaPhoto(photo, caption=f"{name[2:]} — {price}₽"))
-                        else:
-                            media.append(types.InputMediaPhoto(photo))
-                        found_valid_photo = True
-                        logger.info(f"Фото найдено: {file_path}")
+                    # Читаем содержимое файла в память
+                    with open(file_path, "rb") as f:
+                        photo_data = f.read()
+                    
+                    # Создаем временный файл в памяти
+                    from io import BytesIO
+                    photo = BytesIO(photo_data)
+                    photo.name = file
+                    
+                    if i == 0:  # Для первого фото добавляем описание
+                        media.append(types.InputMediaPhoto(photo, caption=f"{name[2:]} — {price}₽"))
+                    else:
+                        media.append(types.InputMediaPhoto(photo))
+                    found_valid_photo = True
+                    logger.info(f"Фото найдено: {file_path}")
                 except Exception as e:
                     logger.error(f"Ошибка при загрузке фото {file}: {e}")
             else:
@@ -269,7 +277,6 @@ def show_merch_item(message):
                 bot.send_message(message.chat.id, "Ошибка при отправке фото. Проверьте наличие файлов на сервере.")
         else:
             bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
-            logger.error("Не удалось найти ни одно фото для товара")
     # Если это одиночное фото (для других товаров)
     else:
         file_path = f"photos/{photo_file}"
@@ -361,6 +368,7 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
 
 
 
