@@ -54,7 +54,7 @@ bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
 # --- Словарь товаров мерча (название: (цена, файл фото или список фото)) ---
 MERCH_ITEMS = {
-    "🛒 Сумка Шоппер":   (500, ["shopper.jpg", "shopper1.jpg"]),
+    "👜 Сумка Шоппер":   (500, ["shopper.jpg", "shopper1.jpg"]),
     "☕ Кружки":    (300, "mug.jpg"),
     "👕 Футболки":  (800, "tshirt.jpg")
 }
@@ -334,3 +334,4 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
