@@ -8,14 +8,12 @@ from flask import Flask, request
 import telebot
 from telebot import types
 from datetime import datetime, date
-
 # --- Настройка логирования ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
 # --- Константы ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
@@ -27,7 +25,6 @@ if not OWNER_ID:
     raise RuntimeError("OWNER_TELEGRAM_ID is required")
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app.onrender.com")
 WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
-
 # --- Инициализация БД ---
 def init_db():
     conn = sqlite3.connect('bot_data.db')
@@ -49,22 +46,18 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
-
 init_db()
-
 # --- Инициализация бота и Flask ---
 app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN)
 bot.remove_webhook()
 bot.set_webhook(url=WEBHOOK_URL)
-
 # --- Словарь товаров мерча (название: (цена, файл фото)) ---
 MERCH_ITEMS = {
     "🛒 Шоперы":   (500, "shopper.jpg"),
     "☕ Кружки":    (300, "mug.jpg"),
     "👕 Футболки":  (800, "tshirt.jpg")
 }
-
 # --- Уникальные пользователи лог ---
 def log_user(user_id):
     today = str(date.today())
@@ -75,7 +68,6 @@ def log_user(user_id):
         cur.execute("INSERT INTO user_log (user_id, date) VALUES (?, ?)", (user_id, today))
         conn.commit()
     conn.close()
-
 # --- Рассылка статистики владельцу ---
 def send_daily_stats():
     while True:
@@ -90,9 +82,7 @@ def send_daily_stats():
             bot.send_message(OWNER_ID, f"📊 Уникальных пользователей за {today}: {count}")
             time.sleep(60)  # ждать минуту, чтобы не продублировать
         time.sleep(10)
-
 threading.Thread(target=send_daily_stats, daemon=True).start()
-
 # --- Автопинг ---
 def self_ping():
     while True:
@@ -102,9 +92,7 @@ def self_ping():
         except Exception as e:
             logger.error(f"Ошибка пинга: {e}")
         time.sleep(300)
-
 threading.Thread(target=self_ping, daemon=True).start()
-
 # --- Главное меню ---
 @bot.message_handler(commands=["start"])
 def start(message):
@@ -125,32 +113,66 @@ def start(message):
                 "📸 Медиа — вдохновляющие фото и видео\n"
                 "🛍 Мерч — одежда и аксессуары ScanDream\n"
                 "🎁 Доп. услуги — всё для вашего комфорта", reply_markup=kb)
-
 # --- Разделы ---
 @bot.message_handler(func=lambda m: m.text == "🌍 Путешествия")
 def travels_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("📂 Архив путешествий", "🌍 Где мы сейчас", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "✈️ Путешествия: архив и текущее местоположение.", reply_markup=kb)
-
 @bot.message_handler(func=lambda m: m.text == "🧘 Кундалини-йога")
 def yoga_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🏢 Офлайн-мероприятия", "💻 Онлайн-йога", "📅 Ближайшие мероприятия", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🧘 Кундалини-йога: офлайн, онлайн и ближайшие события.", reply_markup=kb)
 
+# --- Добавлено: Онлайн-йога ---
+@bot.message_handler(func=lambda m: m.text == "💻 Онлайн-йога")
+def online_yoga(message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("Да, хочу", "Приобрести подписку", "🔙 Назад к онлайн-йоге")
+    bot.send_message(message.chat.id, """Это уникальная возможность быть в поле мастера онлайн. Практики диктуемые эпохой Водолея. Медитации. Работа в малых группах.
+
+Занятия проходят каждый вт и чт в 05:00 по мск. Все записи хранятся в канале группы.
+
+Ценность: 2500 рублей месяц, продление - 2300 руб.
+
+Хотите посмотреть пробный класс?""", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "Да, хочу")
+def try_online_yoga(message):
+    bot.send_message(message.chat.id, "https://disk.yandex.ru/i/nCQFa8edIspzNA")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("Приобрести подписку", "🔙 Назад к онлайн-йоге")
+    bot.send_message(message.chat.id, "Если вам понравилось и вы хотели бы дополнительно узнать больше о онлайн занятии, нажмите кнопку приобрести подписку и мы обязательно свяжемся с вами!", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "Приобрести подписку")
+def buy_subscription(message):
+    # Отправляем информацию владельцу
+    user_info = f"Пользователь @{message.from_user.username or message.chat.id} хочет приобрести подписку на онлайн-йогу."
+    bot.send_message(OWNER_ID, user_info)
+    
+    # Сообщаем пользователю
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🔙 Назад к онлайн-йоге")
+    bot.send_message(message.chat.id, "Спасибо, что выбрали нас, мы скоро свяжемся с вами! 😊", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "🔙 Назад к онлайн-йоге")
+def back_to_online_yoga_menu(message):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🏢 Офлайн-мероприятия", "💻 Онлайн-йога", "📅 Ближайшие мероприятия", "🔙 Назад к меню")
+    bot.send_message(message.chat.id, "🧘 Кундалини-йога: офлайн, онлайн и ближайшие события.", reply_markup=kb)
+# --- Конец добавления онлайн-йоги ---
+
 @bot.message_handler(func=lambda m: m.text == "📸 Медиа")
 def media_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("▶️ YouTube", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🎥 Медиа: наши видео на YouTube.", reply_markup=kb)
-
 @bot.message_handler(func=lambda m: m.text == "🎁 Доп. услуги")
 def services_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🔙 Назад к меню")
     bot.send_message(message.chat.id, "🔧 Дополнительные услуги: детали по запросу.", reply_markup=kb)
-
 @bot.message_handler(func=lambda m: m.text == "👥 Команда")
 def team_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -158,14 +180,11 @@ def team_menu(message):
     bot.send_message(message.chat.id, """Нас зовут Алексей Бабенко — учитель кундалини‑йоги, визионер, путешественник, кинематографист, медиа‑продюсер.
 Более 20 лет личной практики, 18 лет преподавания. Преподаватель тренинга школы Амрит Нам Саровар (Франция) в России.
 Создатель йога‑кемпа и ретритов по Карелии, Северной Осетии, Грузии, Армении и Турции.
-
 И Анастасия Голик — сертифицированный инструктор хатха‑йоги, аромапрактик, вдохновитель и заботливая спутница ретритов.""", reply_markup=kb)
-
 @bot.message_handler(func=lambda m: m.text == "🏷 О бренде")
 def about_brand(message):
     bot.send_message(message.chat.id, """ScanDream - https://t.me/scandream - зарегистрированный товарный знак, основная идея которого осознанные творческие коммуникации. ScanDream - это место, где мы пересобираем конструкт Мира, рассматривая и восхищаясь его строением. Быть #scandream - это сканировать свое жизненное предназначение действием и мечтой. В реальности оставаться активным, осознанным и логичным, а мечтать широко, мощно, свободно и не ощущая предела. 
 Проект йога-кемп - это творческая интеграция опыта и пользы. Пользы через новые знания и умения. Умения через новые формы.""")
-    
 @bot.message_handler(func=lambda m: m.text == "🌐 Официальные источники")
 def official_sources(message):
     bot.send_message(message.chat.id, """ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ взаимодействия с командой ScanDream:
@@ -179,7 +198,6 @@ def official_sources(message):
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад к меню")
 def back_to_menu(message):
     start(message)
-
 # --- Мерч ---
 @bot.message_handler(func=lambda m: m.text == "🛍 Мерч")
 def merch_menu(message):
@@ -188,7 +206,6 @@ def merch_menu(message):
         kb.add(types.KeyboardButton(name))
     kb.add("🛍️ Корзина", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🛍️ Выберите товар:", reply_markup=kb)
-
 @bot.message_handler(func=lambda m: m.text in MERCH_ITEMS)
 def show_merch_item(message):
     name = message.text
@@ -202,14 +219,12 @@ def show_merch_item(message):
     kb.add("✅ Заказать", "🔙 Назад к Мерч")
     msg = bot.send_message(message.chat.id, "Выберите действие:", reply_markup=kb)
     bot.register_next_step_handler(msg, lambda m: merch_order_choice(m, name))
-
 def merch_order_choice(message, item_name):
     if message.text == "✅ Заказать":
         msg = bot.send_message(message.chat.id, "Сколько штук добавить?")
         bot.register_next_step_handler(msg, lambda m: add_merch_quantity(m, item_name))
     else:
         merch_menu(message)
-
 def add_merch_quantity(message, item_name):
     try:
         qty = int(message.text)
@@ -226,7 +241,6 @@ def add_merch_quantity(message, item_name):
     conn.close()
     bot.send_message(message.chat.id, f"✔️ Добавлено: {item_name[2:]} ×{qty}")
     merch_menu(message)
-
 @bot.message_handler(func=lambda m: m.text == "🛍️ Корзина")
 def show_merch_cart(message):
     conn = sqlite3.connect('bot_data.db')
@@ -243,7 +257,6 @@ def show_merch_cart(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("✅ Оформить заказ", "🔙 Назад к Мерч")
     bot.send_message(message.chat.id, f"🛒 Корзина:\n{text}", reply_markup=kb)
-
 @bot.message_handler(func=lambda m: m.text == "✅ Оформить заказ")
 def send_merch_order(message):
     conn = sqlite3.connect('bot_data.db')
@@ -257,30 +270,17 @@ def send_merch_order(message):
     order += "\n".join([f"- {item} ×{qty}" for item, qty in rows])
     bot.send_message(OWNER_ID, order)
     bot.send_message(message.chat.id, "Спасибо, заказ отправлен! 🎉")
-
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад к Мерч")
 def back_to_merch(message):
     merch_menu(message)
-
 # --- Flask ---
 @app.route("/")
 def index():
     return "Bot is running!"
-
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = types.Update.de_json(request.get_json(force=True))
     bot.process_new_updates([update])
     return "", 200
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-
-
-
-
-
-
-
-
-
