@@ -4,243 +4,251 @@ import sqlite3
 import threading
 import time
 import requests
+from datetime import datetime
 from flask import Flask, request
 import telebot
 from telebot import types
+from apscheduler.schedulers.background import BackgroundScheduler
 
-# --- Настройка логирования ---
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+# --- Логирование ---
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- Константы ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-if not TOKEN:
-    logger.error("Переменная TELEGRAM_BOT_TOKEN не установлена")
-    raise RuntimeError("TOKEN is required")
-OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0")) or None
-if not OWNER_ID:
-    logger.error("Переменная OWNER_TELEGRAM_ID не установлена или некорректна")
-    raise RuntimeError("OWNER_TELEGRAM_ID is required")
+OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0"))
+if not TOKEN or not OWNER_ID:
+    raise RuntimeError("Установите TELEGRAM_BOT_TOKEN и OWNER_TELEGRAM_ID")
+
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app.onrender.com")
 WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
 
-# --- Инициализация БД ---
+# --- Инициализация ---
+app = Flask(__name__)
+bot = telebot.TeleBot(TOKEN)
+
+bot.remove_webhook()
+bot.set_webhook(url=WEBHOOK_URL)
+
+# --- БД ---
 def init_db():
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect('bot.db')
     cur = conn.cursor()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS merch_cart (
-            id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            item TEXT,
-            quantity INTEGER
-        )
-    ''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS merch_cart (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER,
+        item TEXT,
+        quantity INTEGER
+    )''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        first_seen TEXT
+    )''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# --- Инициализация бота и Flask ---
-app = Flask(__name__)
-bot = telebot.TeleBot(TOKEN)
-bot.remove_webhook()
-bot.set_webhook(url=WEBHOOK_URL)
-
-# --- Словарь товаров мерча (название: (цена, файл фото)) ---
+# --- Товары ---
 MERCH_ITEMS = {
-    "🛒 Шоперы":   (500, "shopper.jpg"),
-    "☕ Кружки":    (300, "mug.jpg"),
-    "👕 Футболки":  (800, "tshirt.jpg")
+    "👛 Шопер": (500, "shopper.jpg"),
+    "☕ Кружка": (300, "mug.jpg"),
+    "👕 Футболка": (800, "tshirt.jpg"),
 }
 
-# ================= ОБРАБОТЧИКИ =================
+# --- Пользовательские состояния ---
+user_states = {}
 
-@bot.message_handler(commands=["start"])
-def start(message):
+# --- Стартовое меню ---
+def main_menu(chat_id, send_text=True):
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     keyboard.add(
-        types.KeyboardButton("1️⃣ Путешествия"),
-        types.KeyboardButton("2️⃣ Кундалини-йога"),
-        types.KeyboardButton("3️⃣ Медиа"),
-        types.KeyboardButton("4️⃣ Мерч"),
-        types.KeyboardButton("5️⃣ Доп. услуги")
+        types.KeyboardButton("👥 Команда"),
+        types.KeyboardButton("🌍 Путешествия"),
+        types.KeyboardButton("🧘 Кундалини‑йога"),
+        types.KeyboardButton("📸 Медиа"),
+        types.KeyboardButton("🛍 Мерч"),
+        types.KeyboardButton("🎁 Доп. услуги")
     )
-    text = (
-        "👋 Добро пожаловать! Выберите раздел:\n"
-        "1️⃣ Путешествия\n"
-        "2️⃣ Кундалини-йога\n"
-        "3️⃣ Медиа\n"
-        "4️⃣ Мерч\n"
-        "5️⃣ Доп. услуги"
-    )
-    bot.send_message(message.chat.id, text, reply_markup=keyboard)
+    if send_text:
+        text = ("👋 Добро пожаловать!\n"
+                "👥 Команда — познакомьтесь с нами\n"
+                "🌍 Путешествия — авторские туры и ретриты\n"
+                "🧘 Кундалини‑йога — практика и трансформация\n"
+                "📸 Медиа — вдохновляющие фото и видео\n"
+                "🛍 Мерч — одежда и аксессуары ScanDream\n"
+                "🎁 Доп. услуги — всё для вашего комфорта")
+        bot.send_message(chat_id, text, reply_markup=keyboard)
+    return keyboard
 
-# --- Раздел: Мерч с фото и количеством ---
-@bot.message_handler(func=lambda m: m.text and m.text.startswith("4️⃣ Мерч"))
-def merch_menu(message):
+@bot.message_handler(commands=["start"])
+def handler_start(m):
+    track_user(m.chat.id)
+    main_menu(m.chat.id)
+
+# --- Подсчет уникальных пользователей ---
+def track_user(user_id):
+    conn = sqlite3.connect('bot.db')
+    cur = conn.cursor()
+    cur.execute("INSERT OR IGNORE INTO users (user_id, first_seen) VALUES (?, ?)",
+                (user_id, datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
+
+# --- Меню «Команда» ---
+@bot.message_handler(func=lambda m: m.text == "👥 Команда")
+def handler_team(m):
+    track_user(m.chat.id)
+    text = ("Нас зовут Алексей Бабенко — учитель кундалини‑йоги, визионер, путешественник, кинематографист, медиа‑продюсер.\n"
+            "Более 20 лет личной практики, 18 лет преподавания. Преподаватель тренинга школы Амрит Нам Саровар (Франция) в России.\n"
+            "Создатель йога‑кемпа и ретритов по Карелии, Северной Осетии, Грузии, Армении и Турции.\n\n"
+            "И Анастасия Голик — сертифицированный инструктор хатха‑йоги, аромапрактик, вдохновитель и заботливая спутница ретритов.")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("ℹ️ О бренде"), types.KeyboardButton("🔗 Источники"))
+    kb.add(types.KeyboardButton("🔙 Назад"))
+    bot.send_message(m.chat.id, text, reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "ℹ️ О бренде")
+def handler_brand(m):
+    track_user(m.chat.id)
+    text = ("ScanDream — @scandream — зарегистрированный товарный знак. "
+            "Место осознанных творческих коммуникаций, где мы пересобираем конструкт Мира.\n"
+            "Быть #scandream — значит сканировать своё жизненное предназначение мечтой и действием.\n"
+            "Проект «Йога‑кемп» — это интеграция пользы (новые знания) и умений (новые формы).")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("🔙 Назад"))
+    bot.send_message(m.chat.id, text, reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "🔗 Источники")
+def handler_sources(m):
+    track_user(m.chat.id)
+    text = ("Официальные источники:\n"
+            "1. Алексей ВК — https://vk.ru/scandream\n"
+            "2. Анастасия ВК — https://vk.ru/yoga.golik\n"
+            "3. Канал ScanDream•Live — https://t.me/scandream\n"
+            "4. ТГ Алексея — https://t.me/scandreamlife\n"
+            "5. ТГ Анастасии — https://t.me/yogagolik_dnevnik\n"
+            "6. Йога с Алексеем (ВК) — https://vk.ru/kyogababenko")
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("🔙 Назад"))
+    bot.send_message(m.chat.id, text, reply_markup=kb)
+
+# --- Другие разделы (каркас) ---
+@bot.message_handler(func=lambda m: m.text in ["🌍 Путешествия", "🧘 Кундалини‑йога",
+                                              "📸 Медиа", "🎁 Доп. услуги"])
+def handler_other(m):
+    track_user(m.chat.id)
+    main_menu(m.chat.id)
+
+# --- Мерч ---
+@bot.message_handler(func=lambda m: m.text == "🛍 Мерч")
+def handler_merch(m):
+    track_user(m.chat.id)
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    for name in MERCH_ITEMS:
-        keyboard.add(types.KeyboardButton(name))
-    keyboard.add(
-        types.KeyboardButton("🛍️ Корзина"),
-        types.KeyboardButton("🔙 Назад к меню")
-    )
-    bot.send_message(
-        message.chat.id,
-        "🛍️ Раздел Мерч: выберите товар, чтобы посмотреть детали и заказать.",
-        reply_markup=keyboard
-    )
+    for key in MERCH_ITEMS:
+        keyboard.add(types.KeyboardButton(key))
+    keyboard.add(types.KeyboardButton("🛍️ Корзина"), types.KeyboardButton("🔙 Назад"))
+    bot.send_message(m.chat.id, "🛍 Мерч: выберите товар для просмотра", reply_markup=keyboard)
 
-# Показываем фото и кнопки для каждого товара
 @bot.message_handler(func=lambda m: m.text in MERCH_ITEMS)
-def show_merch_item(message):
-    name = message.text
-    price, photo_file = MERCH_ITEMS[name]
+def show_item(m):
+    track_user(m.chat.id)
+    name = m.text
+    price, fname = MERCH_ITEMS[name]
+    caption = f"{name[2:]} — {price}₽"
     try:
-        with open(f"photos/{photo_file}", "rb") as photo:
-            bot.send_photo(
-                message.chat.id,
-                photo,
-                caption=f"{name[2:]} — {price}₽"
-            )
-    except FileNotFoundError:
-        bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
-    # Предлагаем заказать или вернуться
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(
-        types.KeyboardButton("✅ Заказать"),
-        types.KeyboardButton("🔙 Назад к Мерч")
-    )
-    msg = bot.send_message(message.chat.id, "Выберите действие:", reply_markup=keyboard)
-    bot.register_next_step_handler(msg, lambda m: merch_order_choice(m, name))
+        with open(f"photos/{fname}", "rb") as ph:
+            bot.send_photo(m.chat.id, ph, caption=caption)
+    except:
+        bot.send_message(m.chat.id, caption)
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("✅ Заказать"), types.KeyboardButton("🔙 Назад"))
+    msg = bot.send_message(m.chat.id, "Выберите:", reply_markup=kb)
+    user_states[m.chat.id] = {"item": name}
 
-# Обработка выбора заказать или назад
-def merch_order_choice(message, item_name):
-    if message.text == "✅ Заказать":
-        msg = bot.send_message(message.chat.id, "Сколько штук добавить?")
-        bot.register_next_step_handler(msg, lambda m: add_merch_quantity(m, item_name))
-    else:
-        merch_menu(message)
+@bot.message_handler(func=lambda m: m.chat.id in user_states and m.text == "✅ Заказать")
+def ask_qty(m):
+    bot.send_message(m.chat.id, "Сколько штук добавить?")
+    user_states[m.chat.id]["stage"] = "ask_qty"
 
-# Добавление в корзину с количеством
-def add_merch_quantity(message, item_name):
+@bot.message_handler(func=lambda m: m.chat.id in user_states and user_states[m.chat.id].get("stage") == "ask_qty")
+def save_qty(m):
     try:
-        qty = int(message.text)
-        if qty < 1:
-            raise ValueError
-    except ValueError:
-        msg = bot.send_message(message.chat.id, "Введите корректное число (>0):")
-        bot.register_next_step_handler(msg, lambda m: add_merch_quantity(m, item_name))
+        qty = int(m.text)
+        if qty < 1: raise ValueError
+    except:
+        bot.send_message(m.chat.id, "Введите корректное число (>0)")
         return
-    conn = sqlite3.connect('bot_data.db')
+    info = user_states.pop(m.chat.id)
+    item = info["item"][2:]  # без эмодзи
+    conn = sqlite3.connect('bot.db')
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO merch_cart (user_id, item, quantity) VALUES (?, ?, ?)",
-        (message.chat.id, item_name[2:], qty)
-    )
+    cur.execute("INSERT INTO merch_cart (user_id, item, quantity) VALUES (?, ?, ?)",
+                (m.chat.id, item, qty))
     conn.commit()
     conn.close()
-    bot.send_message(message.chat.id, f"✔️ Добавлено: {item_name[2:]} ×{qty}")
-    merch_menu(message)
+    bot.send_message(m.chat.id, f"Добавлено: {item} ×{qty} ✅")
+    handler_merch(m)
 
-# Показ корзины
 @bot.message_handler(func=lambda m: m.text == "🛍️ Корзина")
-def show_merch_cart(message):
-    conn = sqlite3.connect('bot_data.db')
+def show_cart(m):
+    track_user(m.chat.id)
+    conn = sqlite3.connect('bot.db')
     cur = conn.cursor()
-    cur.execute("SELECT item, quantity FROM merch_cart WHERE user_id=?", (message.chat.id,))
-    rows = cur.fetchall()
+    cur.execute("SELECT item, quantity FROM merch_cart WHERE user_id=?", (m.chat.id,))
+    data = cur.fetchall()
     conn.close()
-    if not rows:
-        bot.send_message(
-            message.chat.id,
-            "🛍️ Ваша корзина пуста.",
-            reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add(types.KeyboardButton("🔙 Назад к Мерч"))
-        )
+    if not data:
+        bot.send_message(m.chat.id, "Корзина пуста.", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add(types.KeyboardButton("🔙 Назад")))
         return
-    text = "🛍️ Корзина:\n" + "\n".join([f"- {item}: {qty}" for item, qty in rows])
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add(types.KeyboardButton("✅ Оформить заказ"), types.KeyboardButton("🔙 Назад к Мерч"))
-    bot.send_message(message.chat.id, text, reply_markup=keyboard)
+    text = "🛍 Ваша корзина:\n" + "\n".join([f"- {i}: {q}" for i, q in data])
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add(types.KeyboardButton("📨 Оформить заказ"), types.KeyboardButton("🔙 Назад"))
+    bot.send_message(m.chat.id, text, reply_markup=kb)
 
-# Оформление заказа
-@bot.message_handler(func=lambda m: m.text == "✅ Оформить заказ")
-def send_merch_order(message):
-    conn = sqlite3.connect('bot_data.db')
+@bot.message_handler(func=lambda m: m.text == "📨 Оформить заказ")
+def finalize_order(m):
+    conn = sqlite3.connect('bot.db')
     cur = conn.cursor()
-    cur.execute("SELECT item, quantity FROM merch_cart WHERE user_id=?", (message.chat.id,))
-    rows = cur.fetchall()
-    cur.execute("DELETE FROM merch_cart WHERE user_id=?", (message.chat.id,))
+    cur.execute("SELECT item, quantity FROM merch_cart WHERE user_id=?", (m.chat.id,))
+    data = cur.fetchall()
+    cur.execute("DELETE FROM merch_cart WHERE user_id=?", (m.chat.id,))
     conn.commit()
     conn.close()
-    order = f"Новый заказ мерча от @{message.from_user.username or message.chat.id}:\n"
-    order += "\n".join([f"- {item} ×{qty}" for item, qty in rows])
+    order = (f"📦 Новый заказ от @{m.from_user.username or m.chat.id}:\n" +
+             "\n".join([f"- {i} ×{q}" for i, q in data]))
     bot.send_message(OWNER_ID, order)
-    bot.send_message(
-        message.chat.id,
-        "Спасибо, ваш заказ отправлен! 🎉",
-        reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add(types.KeyboardButton("🔙 Назад к Мерч"))
-    )
+    bot.send_message(m.chat.id, "Спасибо, ваш заказ отправлен! 🎉", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True).add(types.KeyboardButton("🔙 Назад")))
 
-# --- Автопинг для поддержания работы ---
+# --- Автопинг и ежедневная статистика ---
+def send_stats():
+    conn = sqlite3.connect('bot.db')
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users")
+    count = cur.fetchone()[0]
+    conn.close()
+    today = datetime.utcnow().date().isoformat()
+    bot.send_message(OWNER_ID, f"📊 Статистика на {today}: уникальных пользователей — {count}")
+
 def self_ping():
     while True:
         try:
             requests.get(f"{RENDER_URL}/ping", timeout=5)
-            logger.info("Пинг выполнен")
         except Exception as e:
-            logger.error(f"Ошибка пинга: {e}")
+            logger.error("Ping error: %s", e)
         time.sleep(300)
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_stats, 'cron', hour=9, minute=0)  # каждый день в 09:00 UTC
+scheduler.start()
 
 threading.Thread(target=self_ping, daemon=True).start()
 
-# --- Прочие разделы (каркас) ---
-@bot.message_handler(func=lambda m: m.text and m.text.startswith("1️⃣ Путешествия"))
-def travels_menu(message):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("📂 Архив путешествий"), types.KeyboardButton("🌍 Где мы сейчас"))
-    kb.add(types.KeyboardButton("🔙 Назад к меню"))
-    bot.send_message(message.chat.id,
-                     "✈️ Путешествия: архив и текущее местоположение.",
-                     reply_markup=kb)
-
-@bot.message_handler(func=lambda m: m.text and m.text.startswith("2️⃣ Кундалини-йога"))
-def yoga_menu(message):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("🏢 Офлайн-мероприятия"), types.KeyboardButton("💻 Онлайн-йога"))
-    kb.add(types.KeyboardButton("📅 Ближайшие мероприятия"), types.KeyboardButton("🔙 Назад к меню"))
-    bot.send_message(message.chat.id,
-                     "🧘 Кундалини-йога: офлайн, онлайн и ближайшие события.",
-                     reply_markup=kb)
-
-@bot.message_handler(func=lambda m: m.text and m.text.startswith("3️⃣ Медиа"))
-def media_menu(message):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("▶️ YouTube"), types.KeyboardButton("🔙 Назад к меню"))
-    bot.send_message(message.chat.id,
-                     "🎥 Медиа: наши видео на YouTube.",
-                     reply_markup=kb)
-
-@bot.message_handler(func=lambda m: m.text == "5️⃣ Доп. услуги")
-def services_menu(message):
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add(types.KeyboardButton("🔙 Назад к меню"))
-    bot.send_message(message.chat.id,
-                     "🔧 Дополнительные услуги: детали по запросу.",
-                     reply_markup=kb)
-
-@bot.message_handler(func=lambda m: m.text == "🔙 Назад к меню")
-def back_to_start(message):
-    start(message)
-
-# --- Flask-роуты ---
+# --- Flask webhook ---
 @app.route("/", methods=["GET"])
 def index():
-    return "Bot is running!", 200
+    return "OK", 200
 
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
