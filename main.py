@@ -231,10 +231,10 @@ def show_merch_item(message):
     name = message.text
     price, photo_file = MERCH_ITEMS[name]
     
-    # Проверяем, существует ли папка photos
+    # Проверяем существование папки photos
     if not os.path.exists("photos"):
         logger.error("Папка photos не найдена")
-        bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
+        bot.send_message(message.chat.id, "Ошибка: папка с изображениями не найдена")
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
         kb.add("✅ Заказать", "🔙 Назад к Мерч")
         msg = bot.send_message(message.chat.id, "Выберите действие:", reply_markup=kb)
@@ -244,6 +244,7 @@ def show_merch_item(message):
     # Если это список фото (для Сумка Шоппер)
     if isinstance(photo_file, list):
         media = []
+        found_valid_photo = False
         for i, file in enumerate(photo_file):
             file_path = f"photos/{file}"
             if os.path.exists(file_path):
@@ -253,12 +254,14 @@ def show_merch_item(message):
                             media.append(types.InputMediaPhoto(photo, caption=f"{name[2:]} — {price}₽"))
                         else:
                             media.append(types.InputMediaPhoto(photo))
+                        found_valid_photo = True
+                        logger.info(f"Фото найдено: {file_path}")
                 except Exception as e:
                     logger.error(f"Ошибка при загрузке фото {file}: {e}")
             else:
                 logger.warning(f"Файл не найден: {file_path}")
         
-        if media:
+        if media and found_valid_photo:
             try:
                 bot.send_media_group(message.chat.id, media)
             except Exception as e:
@@ -266,6 +269,7 @@ def show_merch_item(message):
                 bot.send_message(message.chat.id, "Ошибка при отправке фото. Проверьте наличие файлов на сервере.")
         else:
             bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
+            logger.error("Не удалось найти ни одно фото для товара")
     # Если это одиночное фото (для других товаров)
     else:
         file_path = f"photos/{photo_file}"
@@ -357,5 +361,6 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
 
 
