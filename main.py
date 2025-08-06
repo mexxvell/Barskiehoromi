@@ -231,30 +231,53 @@ def show_merch_item(message):
     name = message.text
     price, photo_file = MERCH_ITEMS[name]
     
+    # Проверяем, существует ли папка photos
+    if not os.path.exists("photos"):
+        logger.error("Папка photos не найдена")
+        bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.add("✅ Заказать", "🔙 Назад к Мерч")
+        msg = bot.send_message(message.chat.id, "Выберите действие:", reply_markup=kb)
+        bot.register_next_step_handler(msg, lambda m: merch_order_choice(m, name))
+        return
+    
     # Если это список фото (для Сумка Шоппер)
     if isinstance(photo_file, list):
         media = []
         for i, file in enumerate(photo_file):
-            try:
-                with open(f"photos/{file}", "rb") as photo:
-                    if i == 0:  # Для первого фото добавляем описание
-                        media.append(types.InputMediaPhoto(photo, caption=f"{name[2:]} — {price}₽"))
-                    else:
-                        media.append(types.InputMediaPhoto(photo))
-            except Exception as e:
-                logger.error(f"Ошибка при загрузке фото {file}: {e}")
+            file_path = f"photos/{file}"
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "rb") as photo:
+                        if i == 0:  # Для первого фото добавляем описание
+                            media.append(types.InputMediaPhoto(photo, caption=f"{name[2:]} — {price}₽"))
+                        else:
+                            media.append(types.InputMediaPhoto(photo))
+                except Exception as e:
+                    logger.error(f"Ошибка при загрузке фото {file}: {e}")
+            else:
+                logger.warning(f"Файл не найден: {file_path}")
         
         if media:
-            bot.send_media_group(message.chat.id, media)
+            try:
+                bot.send_media_group(message.chat.id, media)
+            except Exception as e:
+                logger.error(f"Ошибка при отправке медиа-группы: {e}")
+                bot.send_message(message.chat.id, "Ошибка при отправке фото. Проверьте наличие файлов на сервере.")
         else:
             bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
     # Если это одиночное фото (для других товаров)
     else:
-        try:
-            with open(f"photos/{photo_file}", "rb") as photo:
-                bot.send_photo(message.chat.id, photo, caption=f"{name[2:]} — {price}₽")
-        except Exception as e:
-            logger.error(f"Ошибка при загрузке фото: {e}")
+        file_path = f"photos/{photo_file}"
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "rb") as photo:
+                    bot.send_photo(message.chat.id, photo, caption=f"{name[2:]} — {price}₽")
+            except Exception as e:
+                logger.error(f"Ошибка при загрузке фото: {e}")
+                bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
+        else:
+            logger.error(f"Файл не найден: {file_path}")
             bot.send_message(message.chat.id, f"{name[2:]} — {price}₽")
     
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -334,4 +357,5 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
 
