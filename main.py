@@ -10,7 +10,9 @@ import telebot
 from telebot import types
 from datetime import datetime, date
 import sqlalchemy
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
+# --- ИСПРАВЛЕНО: переименовали импорт text в sql_text для избежания конфликта имен ---
+from sqlalchemy import text as sql_text
 from sqlalchemy.exc import OperationalError
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -39,7 +41,7 @@ if DATABASE_URL:
         engine = create_engine(DATABASE_URL)
         # Проверяем подключение
         with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
+            conn.execute(sql_text("SELECT 1"))
         logger.info("Успешное подключение к PostgreSQL")
     except Exception as e:
         logger.error(f"Ошибка подключения к PostgreSQL: {e}")
@@ -60,7 +62,7 @@ def init_db():
     try:
         with engine.connect() as conn:
             # корзина (с ценой)
-            conn.execute(text('''
+            conn.execute(sql_text('''
                 CREATE TABLE IF NOT EXISTS merch_cart (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER,
@@ -70,7 +72,7 @@ def init_db():
                 )
             '''))
             # лог уникальных пользователей
-            conn.execute(text('''
+            conn.execute(sql_text('''
                 CREATE TABLE IF NOT EXISTS user_log (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER,
@@ -78,7 +80,7 @@ def init_db():
                 )
             '''))
             # таблица заказов с статусами
-            conn.execute(text('''
+            conn.execute(sql_text('''
                 CREATE TABLE IF NOT EXISTS merch_orders (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER,
@@ -92,7 +94,7 @@ def init_db():
                 )
             '''))
             # таблица отложенных (pending) заказов, ожидающих подтверждения владельца
-            conn.execute(text('''
+            conn.execute(sql_text('''
                 CREATE TABLE IF NOT EXISTS merch_pending (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER,
@@ -103,7 +105,7 @@ def init_db():
                 )
             '''))
             # подписчики на события
-            conn.execute(text('''
+            conn.execute(sql_text('''
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     user_id INTEGER PRIMARY KEY,
                     date_subscribed TEXT,
@@ -111,7 +113,7 @@ def init_db():
                 )
             '''))
             # таблица отписчиков
-            conn.execute(text('''
+            conn.execute(sql_text('''
                 CREATE TABLE IF NOT EXISTS unsubscriptions (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER,
@@ -120,7 +122,7 @@ def init_db():
                 )
             '''))
             # таблица рефералов
-            conn.execute(text('''
+            conn.execute(sql_text('''
                 CREATE TABLE IF NOT EXISTS referrals (
                     user_id INTEGER PRIMARY KEY,
                     referral_code TEXT UNIQUE,
@@ -282,11 +284,11 @@ def log_user(user_id):
     today = str(date.today())
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT 1 FROM user_log WHERE user_id = :user_id AND date = :today"
             ), {"user_id": user_id, "today": today})
             if not result.fetchone():
-                conn.execute(text(
+                conn.execute(sql_text(
                     "INSERT INTO user_log (user_id, date) VALUES (:user_id, :today)"
                 ), {"user_id": user_id, "today": today})
                 conn.commit()
@@ -300,7 +302,7 @@ def send_daily_stats():
             today = str(date.today())
             try:
                 with engine.connect() as conn:
-                    result = conn.execute(text(
+                    result = conn.execute(sql_text(
                         "SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date = :today"
                     ), {"today": today})
                     count = result.fetchone()[0]
@@ -327,7 +329,7 @@ threading.Thread(target=self_ping, daemon=True).start()
 def add_to_cart_db(user_id, item, quantity, price):
     try:
         with engine.connect() as conn:
-            conn.execute(text(
+            conn.execute(sql_text(
                 "INSERT INTO merch_cart (user_id, item, quantity, price) VALUES (:user_id, :item, :quantity, :price)"
             ), {
                 "user_id": user_id,
@@ -341,7 +343,7 @@ def add_to_cart_db(user_id, item, quantity, price):
 def get_cart_items(user_id):
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT item, quantity, price FROM merch_cart WHERE user_id = :user_id"
             ), {"user_id": user_id})
             rows = result.fetchall()
@@ -352,7 +354,7 @@ def get_cart_items(user_id):
 def clear_cart(user_id):
     try:
         with engine.connect() as conn:
-            conn.execute(text(
+            conn.execute(sql_text(
                 "DELETE FROM merch_cart WHERE user_id = :user_id"
             ), {"user_id": user_id})
             conn.commit()
@@ -376,7 +378,7 @@ def create_pending_from_cart(user_id, username):
     items_json = json.dumps(items_list, ensure_ascii=False)
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "INSERT INTO merch_pending (user_id, username, items_json, total, date) VALUES (:user_id, :username, :items_json, :total, :date) RETURNING id"
             ), {
                 "user_id": user_id,
@@ -394,7 +396,7 @@ def create_pending_from_cart(user_id, username):
 def get_pending(pending_id):
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT id, user_id, username, items_json, total, date FROM merch_pending WHERE id = :pending_id"
             ), {"pending_id": pending_id})
             row = result.fetchone()
@@ -405,7 +407,7 @@ def get_pending(pending_id):
 def delete_pending(pending_id):
     try:
         with engine.connect() as conn:
-            conn.execute(text(
+            conn.execute(sql_text(
                 "DELETE FROM merch_pending WHERE id = :pending_id"
             ), {"pending_id": pending_id})
             conn.commit()
@@ -430,7 +432,7 @@ def move_pending_to_orders(pending_id):
                 qty = int(it.get("quantity", 0))
                 price = int(it.get("price", 0))
                 total_item = int(it.get("total", qty * price))
-                conn.execute(text(
+                conn.execute(sql_text(
                     "INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status) VALUES (:user_id, :username, :item, :quantity, :price, :total, :date, :status)"
                 ), {
                     "user_id": user_id,
@@ -444,7 +446,7 @@ def move_pending_to_orders(pending_id):
                 })
                 # Логируем заказ в Google Sheets
                 if GOOGLE_SHEETS_ENABLED:
-                    order_id = conn.execute(text("SELECT LASTVAL()")).fetchone()[0]
+                    order_id = conn.execute(sql_text("SELECT LASTVAL()")).fetchone()[0]
                     log_order_to_google_sheets(
                         order_id, user_id, username, item, qty, price, total_item, date_str, "В обработке"
                     )
@@ -470,7 +472,7 @@ def start(message):
     # Проверяем, новый ли пользователь
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT 1 FROM referrals WHERE user_id = :user_id"
             ), {"user_id": message.chat.id})
             is_new_user = not bool(result.fetchone())
@@ -483,7 +485,7 @@ def start(message):
         ref_code = message.text.split()[1]
         try:
             with engine.connect() as conn:
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT user_id FROM referrals WHERE referral_code = :ref_code"
                 ), {"ref_code": ref_code})
                 referrer = result.fetchone()
@@ -502,7 +504,7 @@ def start(message):
         # Добавляем пользователя в таблицу referrals
         try:
             with engine.connect() as conn:
-                conn.execute(text(
+                conn.execute(sql_text(
                     "INSERT INTO referrals (user_id, referral_code, referred_by, date_registered) VALUES (:user_id, :referral_code, :referred_by, :date_registered)"
                 ), {
                     "user_id": message.chat.id,
@@ -513,14 +515,14 @@ def start(message):
                 conn.commit()
                 # Если есть реферер, увеличиваем его счетчик
                 if referrer_id:
-                    conn.execute(text(
+                    conn.execute(sql_text(
                         "UPDATE referrals SET referrals_count = referrals_count + 1, bonus_points = bonus_points + 10 WHERE user_id = :referrer_id"
                     ), {"referrer_id": referrer_id})
                     conn.commit()
                     # Уведомляем реферера
                     try:
                         with engine.connect() as conn2:
-                            result = conn2.execute(text(
+                            result = conn2.execute(sql_text(
                                 "SELECT referrals_count FROM referrals WHERE user_id = :referrer_id"
                             ), {"referrer_id": referrer_id})
                             referrals_count = result.fetchone()[0]
@@ -577,7 +579,7 @@ def my_orders(message):
         return
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
             ), {"user_id": message.chat.id})
             rows = result.fetchall()
@@ -605,7 +607,7 @@ def purchase_history(message):
         return
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
             ), {"user_id": message.chat.id})
             rows = result.fetchall()
@@ -638,7 +640,7 @@ def referral_link(message):
         return
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT referral_code, referrals_count, bonus_points FROM referrals WHERE user_id = :user_id"
             ), {"user_id": message.chat.id})
             referral_info = result.fetchone()
@@ -766,17 +768,17 @@ def subscribe_events(message):
         date_subscribed = str(date.today())
         with engine.connect() as conn:
             # Проверяем, не отписывался ли пользователь ранее
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT 1 FROM unsubscriptions WHERE user_id = :user_id"
             ), {"user_id": message.chat.id})
             was_unsubscribed = bool(result.fetchone())
             # Если ранее отписывался, удаляем из таблицы отписчиков
             if was_unsubscribed:
-                conn.execute(text(
+                conn.execute(sql_text(
                     "DELETE FROM unsubscriptions WHERE user_id = :user_id"
                 ), {"user_id": message.chat.id})
             # Добавляем в подписчики
-            conn.execute(text(
+            conn.execute(sql_text(
                 "INSERT INTO subscriptions (user_id, date_subscribed, username) VALUES (:user_id, :date_subscribed, :username) " +
                 "ON CONFLICT (user_id) DO UPDATE SET date_subscribed = EXCLUDED.date_subscribed, username = EXCLUDED.username"
             ), {
@@ -803,11 +805,11 @@ def unsubscribe_events(message):
         date_unsubscribed = str(date.today())
         with engine.connect() as conn:
             # Удаляем из подписчиков
-            conn.execute(text(
+            conn.execute(sql_text(
                 "DELETE FROM subscriptions WHERE user_id = :user_id"
             ), {"user_id": message.chat.id})
             # Добавляем в отписчики
-            conn.execute(text(
+            conn.execute(sql_text(
                 "INSERT INTO unsubscriptions (user_id, date_unsubscribed, username) VALUES (:user_id, :date_unsubscribed, :username)"
             ), {
                 "user_id": message.chat.id,
@@ -1037,7 +1039,7 @@ def my_orders(message):
         return
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
             ), {"user_id": message.chat.id})
             rows = result.fetchall()
@@ -1087,12 +1089,12 @@ def callback_query_handler(call: types.CallbackQuery):
         try:
             with engine.connect() as conn:
                 today = str(date.today())
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date = :today"
                 ), {"today": today})
                 today_count = result.fetchone()[0] or 0
                 
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT COUNT(DISTINCT user_id) FROM user_log"
                 ))
                 total_count = result.fetchone()[0] or 0
@@ -1108,7 +1110,7 @@ def callback_query_handler(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         try:
             with engine.connect() as conn:
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT user_id, username FROM subscriptions"
                 ))
                 rows = result.fetchall()
@@ -1143,7 +1145,7 @@ def callback_query_handler(call: types.CallbackQuery):
         try:
             with engine.connect() as conn:
                 # Исправленный запрос с учетом всех полей таблицы
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders ORDER BY id DESC LIMIT 50"
                 ))
                 rows = result.fetchall()
@@ -1176,7 +1178,7 @@ def callback_query_handler(call: types.CallbackQuery):
         try:
             with engine.connect() as conn:
                 # Исправленный запрос с учетом всех полей
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders WHERE id = :oid"
                 ), {"oid": oid})
                 row = result.fetchone()
@@ -1215,7 +1217,7 @@ def callback_query_handler(call: types.CallbackQuery):
             return
         try:
             with engine.connect() as conn:
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT user_id FROM merch_orders WHERE id = :oid"
                 ), {"oid": oid})
                 row = result.fetchone()
@@ -1223,7 +1225,7 @@ def callback_query_handler(call: types.CallbackQuery):
                     bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
                     return
                 user_for_notify = row[0]
-                conn.execute(text(
+                conn.execute(sql_text(
                     "UPDATE merch_orders SET status = :new_status WHERE id = :oid"
                 ), {"new_status": new_status, "oid": oid})
                 conn.commit()
@@ -1247,11 +1249,11 @@ def callback_query_handler(call: types.CallbackQuery):
             return
         try:
             with engine.connect() as conn:
-                result = conn.execute(text(
+                result = conn.execute(sql_text(
                     "SELECT user_id FROM merch_orders WHERE id = :oid"
                 ), {"oid": oid})
                 row = result.fetchone()
-                conn.execute(text(
+                conn.execute(sql_text(
                     "DELETE FROM merch_orders WHERE id = :oid"
                 ), {"oid": oid})
                 conn.commit()
@@ -1352,7 +1354,7 @@ def confirm_broadcast(broadcast_text):
     """Фактическая отправка рассылки"""
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(
+            result = conn.execute(sql_text(
                 "SELECT user_id FROM subscriptions"
             ))
             rows = result.fetchall()
