@@ -4,6 +4,7 @@ import sqlite3
 import threading
 import time
 import requests
+import json
 from io import BytesIO
 from flask import Flask, request
 import telebot
@@ -33,7 +34,7 @@ WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
 def init_db():
     conn = sqlite3.connect('bot_data.db')
     cur = conn.cursor()
-    # корзина (оставляем прежнюю структуру, но при добавлении в корзину будем хранить цену)
+    # корзина (с ценой)
     cur.execute('''
         CREATE TABLE IF NOT EXISTS merch_cart (
             id INTEGER PRIMARY KEY,
@@ -51,7 +52,6 @@ def init_db():
             date TEXT
         )
     ''')
-
     # таблица заказов с статусами
     cur.execute('''
         CREATE TABLE IF NOT EXISTS merch_orders (
@@ -66,14 +66,23 @@ def init_db():
             status TEXT
         )
     ''')
-
+    # таблица отложенных (pending) заказов, ожидающих подтверждения владельца
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS merch_pending (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT,
+            items_json TEXT,
+            total INTEGER,
+            date TEXT
+        )
+    ''')
     # подписчики на события
     cur.execute('''
         CREATE TABLE IF NOT EXISTS subscriptions (
             user_id INTEGER PRIMARY KEY
         )
     ''')
-
     conn.commit()
     conn.close()
 
@@ -159,27 +168,76 @@ def clear_cart(user_id):
     conn.commit()
     conn.close()
 
-def create_order_from_cart(user_id, username):
+def create_pending_from_cart(user_id, username):
+    """
+    Создаёт запись в merch_pending на основе корзины (не очищает корзину).
+    Возвращает id pending.
+    """
     items = get_cart_items(user_id)
     if not items:
         return None
-    conn = sqlite3.connect('bot_data.db')
-    cur = conn.cursor()
     today = str(date.today())
-    order_lines = []
+    items_list = []
     total_sum = 0
     for item, qty, price in items:
         total = qty * price
         total_sum += total
-        cur.execute(
-            "INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (user_id, username, item, qty, price, total, today, "В обработке")
-        )
-        order_lines.append(f"- {item} ×{qty} = {total}₽")
+        items_list.append({"item": item, "quantity": qty, "price": price, "total": total})
+    items_json = json.dumps(items_list, ensure_ascii=False)
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    cur.execute("INSERT INTO merch_pending (user_id, username, items_json, total, date) VALUES (?, ?, ?, ?, ?)",
+                (user_id, username, items_json, total_sum, today))
+    pid = cur.lastrowid
     conn.commit()
     conn.close()
+    return pid, items_list, total_sum
+
+def get_pending(pending_id):
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    cur.execute("SELECT id, user_id, username, items_json, total, date FROM merch_pending WHERE id=?", (pending_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+def delete_pending(pending_id):
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    cur.execute("DELETE FROM merch_pending WHERE id=?", (pending_id,))
+    conn.commit()
+    conn.close()
+
+def move_pending_to_orders(pending_id):
+    """
+    Переносит pending в merch_orders (по каждому item создаёт запись), очищает корзину пользователя.
+    """
+    row = get_pending(pending_id)
+    if not row:
+        return False
+    _, user_id, username, items_json, total, date_str = row
+    try:
+        items = json.loads(items_json)
+    except:
+        items = []
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    for it in items:
+        item = it.get("item")
+        qty = int(it.get("quantity", 0))
+        price = int(it.get("price", 0))
+        total_item = int(it.get("total", qty * price))
+        cur.execute(
+            "INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, username, item, qty, price, total_item, date_str, "В обработке")
+        )
+    conn.commit()
+    conn.close()
+    # очистить корзину пользователя
     clear_cart(user_id)
-    return total_sum, order_lines
+    # удалить pending
+    delete_pending(pending_id)
+    return True
 
 # --- Главное меню ---
 @bot.message_handler(commands=["start"])
@@ -194,7 +252,6 @@ def start(message):
         types.KeyboardButton("🛍 Мерч"),
         types.KeyboardButton("🎁 Доп. услуги")
     )
-    # админ может вызвать панель через /admin, не добавляем админ-кнопку в общий интерфейс
     bot.send_message(message.chat.id, "👋 Добро пожаловать!\n"
                 "👥 Команда — познакомьтесь с нами\n"
                 "🌍 Путешествия — авторские туры и ретриты\n"
@@ -203,7 +260,7 @@ def start(message):
                 "🛍 Мерч — одежда и аксессуары ScanDream\n"
                 "🎁 Доп. услуги — всё для вашего комфорта", reply_markup=kb)
 
-# --- Разделы (без изменений логики, добавлены опции подписки в Доп. услуги) ---
+# --- Разделы (сохранил логику) ---
 @bot.message_handler(func=lambda m: m.text == "🌍 Путешествия")
 def travels_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -216,7 +273,7 @@ def yoga_menu(message):
     kb.add("🏢 Офлайн-мероприятия", "💻 Онлайн-йога", "📅 Ближайшие мероприятия", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🧘 Кундалини-йога: офлайн, онлайн и ближайшие события.", reply_markup=kb)
 
-# --- Онлайн-йога (оставил как есть) ---
+# --- Онлайн-йога (оставлено как есть) ---
 @bot.message_handler(func=lambda m: m.text == "💻 Онлайн-йога")
 def online_yoga(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -270,7 +327,7 @@ def media_menu(message):
     kb.add("▶️ YouTube", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🎥 Медиа: наши видео на YouTube.", reply_markup=kb)
 
-# --- Доп. услуги: добавлены кнопки подписки/отписки ---
+# --- Доп. услуги: подписка/отписка ---
 @bot.message_handler(func=lambda m: m.text == "🎁 Доп. услуги")
 def services_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -334,7 +391,7 @@ def official_sources(message):
 def back_to_menu(message):
     start(message)
 
-# --- Мерч: меню (не тронул основной UX, добавил хранение цены в корзине) ---
+# --- Мерч: меню (добавлены кнопки "Мои заказы") ---
 @bot.message_handler(func=lambda m: m.text == "🛍 Мерч")
 def merch_menu(message):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -459,19 +516,28 @@ def clear_cart_handler(message):
 
 @bot.message_handler(func=lambda m: m.text == "✅ Оформить заказ")
 def send_merch_order(message):
-    # создаём заказы из корзины (несколько записей — по каждому предмету)
+    # Создаём pending заказ и отправляем владельцу для подтверждения
     username = f"@{message.from_user.username}" if message.from_user.username else str(message.chat.id)
-    result = create_order_from_cart(message.chat.id, username)
-    if not result:
+    res = create_pending_from_cart(message.chat.id, username)
+    if not res:
         bot.send_message(message.chat.id, "Корзина пуста.")
         return
-    total_sum, order_lines = result
-    order_text = f"Новый заказ от {username}:\n" + "\n".join(order_lines) + f"\nИтого: {total_sum}₽"
-    # отправляем владельцу
-    bot.send_message(OWNER_ID, order_text)
-    # подтверждение пользователю
-    bot.send_message(message.chat.id, "Спасибо, заказ отправлен владельцу! 🎉\nСтатус заказа: В обработке")
-    merch_menu(message)
+    pending_id, items_list, total_sum = res
+    # формируем текст для владельца
+    order_lines = [f"- {it['item']} ×{it['quantity']} = {it['total']}₽" for it in items_list]
+    order_text = f"Новый заказ (ожидает подтверждения) #{pending_id} от {username}:\n" + "\n".join(order_lines) + f"\nИтого: {total_sum}₽"
+    # inline кнопки для подтверждения/отклонения
+    ikb = types.InlineKeyboardMarkup()
+    ikb.add(
+        types.InlineKeyboardButton("✅ Подтвердить", callback_data=f"confirm_pending:{pending_id}"),
+        types.InlineKeyboardButton("❌ Отклонить", callback_data=f"decline_pending:{pending_id}")
+    )
+    try:
+        bot.send_message(OWNER_ID, order_text, reply_markup=ikb)
+        bot.send_message(message.chat.id, "Заказ отправлен владельцу на подтверждение. Вы получите уведомление после решения.")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке заказа владельцу: {e}")
+        bot.send_message(message.chat.id, "Не удалось отправить заказ владельцу. Попробуйте позже.")
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад к Мерч")
 def back_to_merch(message):
@@ -495,82 +561,227 @@ def my_orders(message):
     bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
     merch_menu(message)
 
-# --- Админ-панель и команды владельца ---
+# --- Админ-панель (inline) и команды владельца ---
 @bot.message_handler(commands=['admin'])
 def admin_command(message):
     if message.chat.id != OWNER_ID:
         return
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("📊 Статистика", "🛍 Заказы", "📬 Рассылка", "📢 Подписчики", "🔙 В главное меню")
-    bot.send_message(message.chat.id, "Админ-панель:", reply_markup=kb)
+    ikb = types.InlineKeyboardMarkup(row_width=1)
+    ikb.add(
+        types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
+        types.InlineKeyboardButton("🛍 Заказы", callback_data="admin_orders"),
+        types.InlineKeyboardButton("📬 Рассылка", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("📢 Подписчики", callback_data="admin_subscribers"),
+        types.InlineKeyboardButton("🔙 В главное меню", callback_data="admin_back")
+    )
+    bot.send_message(OWNER_ID, "Админ-панель (inline):", reply_markup=ikb)
 
-@bot.message_handler(func=lambda m: m.chat.id == OWNER_ID and m.text == "📊 Статистика")
-def admin_stats(message):
-    conn = sqlite3.connect('bot_data.db')
-    cur = conn.cursor()
-    # сегодня
-    today = str(date.today())
-    cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date=?", (today,))
-    today_count = cur.fetchone()[0]
-    # всего уникальных пользователей (по всем датам)
-    cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log")
-    total_count = cur.fetchone()[0]
-    conn.close()
-    bot.send_message(OWNER_ID, f"📊 Статистика\nСегодня: {today_count}\nЗа всё время: {total_count}")
+# --- Обработчик callback'ов (inline кнопки) ---
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query_handler(call: types.CallbackQuery):
+    data = call.data
+    user_id = call.from_user.id
+    # Только владелец может использовать админ inline
+    if data == "admin_back" and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        start(call.message)
+        return
 
-@bot.message_handler(func=lambda m: m.chat.id == OWNER_ID and m.text == "🛍 Заказы")
-def admin_orders(message):
-    conn = sqlite3.connect('bot_data.db')
-    cur = conn.cursor()
-    cur.execute("SELECT id, user_id, username, item, quantity, total, date, status FROM merch_orders ORDER BY id DESC LIMIT 50")
-    rows = cur.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(OWNER_ID, "Заказов нет.")
-        return
-    lines = []
-    for oid, user_id, username, item, qty, total, date_str, status in rows:
-        lines.append(f"#{oid} | {username} ({user_id}) | {item}×{qty} | {total}₽ | {status}")
-    bot.send_message(OWNER_ID, "Последние заказы:\n" + "\n".join(lines))
-    bot.send_message(OWNER_ID, "Чтобы изменить статус заказа: отправьте `status <id> <новый статус>` (например: status 12 Отправлен)", parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.chat.id == OWNER_ID and m.text and m.text.startswith("status "))
-def admin_change_status(message):
-    # формат: status <id> <новый статус>
-    parts = message.text.split(" ", 2)
-    if len(parts) < 3:
-        bot.send_message(OWNER_ID, "Неправильный формат. Используйте: status <id> <новый статус>")
-        return
-    try:
-        oid = int(parts[1])
-        new_status = parts[2].strip()
-    except:
-        bot.send_message(OWNER_ID, "Неправильный формат id.")
-        return
-    conn = sqlite3.connect('bot_data.db')
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM merch_orders WHERE id=?", (oid,))
-    row = cur.fetchone()
-    if not row:
-        bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
+    if data == "admin_stats" and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        today = str(date.today())
+        cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date=?", (today,))
+        today_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log")
+        total_count = cur.fetchone()[0]
         conn.close()
+        bot.send_message(OWNER_ID, f"📊 Статистика\nСегодня: {today_count}\nЗа всё время: {total_count}")
         return
-    user_id = row[0]
-    cur.execute("UPDATE merch_orders SET status=? WHERE id=?", (new_status, oid))
-    conn.commit()
-    conn.close()
-    bot.send_message(OWNER_ID, f"Статус заказа #{oid} изменён на: {new_status}")
+
+    if data == "admin_subscribers" and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM subscriptions")
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            bot.send_message(OWNER_ID, "Нет подписчиков.")
+        else:
+            lst = ", ".join([str(r[0]) for r in rows])
+            bot.send_message(OWNER_ID, f"Подписчики: {lst}")
+        return
+
+    if data == "admin_broadcast" and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        # просим владельца отправить текст — используем обычный flow: попросим в чат отправить текст
+        msg = bot.send_message(OWNER_ID, "Отправьте текст рассылки (будет отправлено всем подписчикам).")
+        bot.register_next_step_handler(msg, admin_broadcast_send)
+        return
+
+    # показать список заказов (админ)
+    if data == "admin_orders" and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        cur.execute("SELECT id, user_id, username, item, quantity, total, date, status FROM merch_orders ORDER BY id DESC LIMIT 50")
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            bot.send_message(OWNER_ID, "Заказов нет.")
+            return
+        # для компактности покажем кнопки-переключатели на отдельные заказы
+        ikb = types.InlineKeyboardMarkup(row_width=1)
+        for oid, uid, username, item, qty, total, date_str, status in rows:
+            label = f"#{oid} | {username} | {item}×{qty} | {total}₽ | {status}"
+            ikb.add(types.InlineKeyboardButton(label, callback_data=f"open_order:{oid}"))
+        ikb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back"))
+        bot.send_message(OWNER_ID, "Последние заказы (нажмите для управления):", reply_markup=ikb)
+        return
+
+    # открыть конкретный заказ (показать детали + кнопки изменения статуса)
+    if data and data.startswith("open_order:") and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        try:
+            oid = int(data.split(":", 1)[1])
+        except:
+            bot.send_message(OWNER_ID, "Неправильный id заказа.")
+            return
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        cur.execute("SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders WHERE id=?", (oid,))
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
+            return
+        _, uid, username, item, qty, price, total, date_str, status = row
+        text = f"Заказ #{oid}\nПользователь: {username} ({uid})\nТовар: {item}\nКол-во: {qty}\nЦена: {price}₽/шт\nСумма: {total}₽\nДата: {date_str}\nСтатус: {status}"
+        # кнопки для изменения статуса (исключая текущий)
+        statuses = ["В обработке", "Отправлен", "Доставлен", "Отклонён"]
+        ikb = types.InlineKeyboardMarkup(row_width=2)
+        for st in statuses:
+            if st != status:
+                ikb.add(types.InlineKeyboardButton(st, callback_data=f"change_status:{oid}:{st}"))
+        ikb.add(types.InlineKeyboardButton("Удалить заказ", callback_data=f"delete_order:{oid}"))
+        ikb.add(types.InlineKeyboardButton("🔙 Назад к списку", callback_data="admin_orders"))
+        bot.send_message(OWNER_ID, text, reply_markup=ikb)
+        return
+
+    # изменить статус заказа (админ)
+    if data and data.startswith("change_status:") and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        parts = data.split(":", 2)
+        if len(parts) < 3:
+            bot.send_message(OWNER_ID, "Неправильный формат.")
+            return
+        try:
+            oid = int(parts[1])
+            new_status = parts[2]
+        except:
+            bot.send_message(OWNER_ID, "Неправильный формат данных.")
+            return
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM merch_orders WHERE id=?", (oid,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
+            return
+        user_for_notify = row[0]
+        cur.execute("UPDATE merch_orders SET status=? WHERE id=?", (new_status, oid))
+        conn.commit()
+        conn.close()
+        bot.send_message(OWNER_ID, f"Статус заказа #{oid} изменён на: {new_status}")
+        try:
+            bot.send_message(user_for_notify, f"Обновление статуса вашего заказа #{oid}: {new_status}")
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {user_for_notify}: {e}")
+        return
+
+    # удалить заказ (админ)
+    if data and data.startswith("delete_order:") and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id)
+        try:
+            oid = int(data.split(":", 1)[1])
+        except:
+            bot.send_message(OWNER_ID, "Неправильный id.")
+            return
+        conn = sqlite3.connect('bot_data.db')
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM merch_orders WHERE id=?", (oid,))
+        row = cur.fetchone()
+        cur.execute("DELETE FROM merch_orders WHERE id=?", (oid,))
+        conn.commit()
+        conn.close()
+        bot.send_message(OWNER_ID, f"Заказ #{oid} удалён.")
+        if row:
+            try:
+                bot.send_message(row[0], f"Ваш заказ #{oid} удалён администратором.")
+            except Exception:
+                pass
+        return
+
+    # Обработка подтверждения/отклонения pending заказов (владелец)
+    if data and data.startswith("confirm_pending:") and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id, "Подтверждаю заказ")
+        try:
+            pid = int(data.split(":", 1)[1])
+        except:
+            bot.send_message(OWNER_ID, "Неправильный id pending.")
+            return
+        pending = get_pending(pid)
+        if not pending:
+            bot.send_message(OWNER_ID, f"Ожидающий заказ #{pid} не найден.")
+            return
+        # переносим pending -> orders, очищаем корзину пользователя
+        ok = move_pending_to_orders(pid)
+        if ok:
+            _, uid, username, items_json, total, date_str = pending
+            bot.send_message(OWNER_ID, f"Заказ #{pid} подтверждён и перенесён в заказы.")
+            try:
+                bot.send_message(uid, f"Ваш заказ #{pid} подтверждён владельцем. Статус: В обработке. Общая сумма: {total}₽")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
+        else:
+            bot.send_message(OWNER_ID, "Ошибка при подтверждении заказа.")
+        return
+
+    if data and data.startswith("decline_pending:") and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id, "Отклоняю заказ")
+        try:
+            pid = int(data.split(":", 1)[1])
+        except:
+            bot.send_message(OWNER_ID, "Неправильный id pending.")
+            return
+        pending = get_pending(pid)
+        if not pending:
+            bot.send_message(OWNER_ID, f"Ожидающий заказ #{pid} не найден.")
+            return
+        _, uid, username, items_json, total, date_str = pending
+        # удаляем pending и очищаем корзину пользователя (по твоему запросу)
+        delete_pending(pid)
+        try:
+            clear_cart(uid)
+        except Exception as e:
+            logger.error(f"Ошибка при очистке корзины пользователя после отклонения: {e}")
+        bot.send_message(OWNER_ID, f"Заказ #{pid} отклонён и удалён.")
+        try:
+            bot.send_message(uid, f"Ваш заказ #{pid} отклонён владельцем. Корзина очищена. При желании оформите заказ снова.")
+        except Exception as e:
+            logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
+        return
+
+    # fallback: неопознанный callback — просто ack
     try:
-        bot.send_message(user_id, f"Обновление статуса вашего заказа #{oid}: {new_status}")
-    except Exception as e:
-        logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
+        bot.answer_callback_query(call.id)
+    except:
+        pass
 
-@bot.message_handler(func=lambda m: m.chat.id == OWNER_ID and m.text == "📬 Рассылка")
-def admin_broadcast_init(message):
-    bot.send_message(OWNER_ID, "Отправьте текст рассылки (будет отправлено всем подписчикам).")
-    msg = bot.send_message(OWNER_ID, "Жду текст для рассылки:")
-    bot.register_next_step_handler(msg, admin_broadcast_send)
-
+# --- Рассылка (админ) ---
 def admin_broadcast_send(message):
     text = message.text
     conn = sqlite3.connect('bot_data.db')
@@ -590,25 +801,7 @@ def admin_broadcast_send(message):
             logger.error(f"Ошибка при отправке рассылки {user_id}: {e}")
     bot.send_message(OWNER_ID, f"Рассылка отправлена. Успешных отправок: {sent}")
 
-@bot.message_handler(func=lambda m: m.chat.id == OWNER_ID and m.text == "📢 Подписчики")
-def admin_list_subscribers(message):
-    conn = sqlite3.connect('bot_data.db')
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM subscriptions")
-    rows = cur.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(OWNER_ID, "Нет подписчиков.")
-        return
-    lst = ", ".join([str(r[0]) for r in rows])
-    # при большом количестве можно ограничить вывод, но для простоты отдаём весь список
-    bot.send_message(OWNER_ID, f"Подписчики: {lst}")
-
-@bot.message_handler(func=lambda m: m.chat.id == OWNER_ID and m.text == "🔙 В главное меню")
-def admin_back(message):
-    start(message)
-
-# --- Обработчик webhook для Flask ---
+# --- Остальной webhook и запуск Flask ---
 @app.route("/")
 def index():
     return "Bot is running!"
@@ -620,5 +813,4 @@ def webhook():
     return "", 200
 
 if __name__ == "__main__":
-    # запуск Flask (как у тебя было)
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
