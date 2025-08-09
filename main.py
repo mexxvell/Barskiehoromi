@@ -27,8 +27,18 @@ OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0")) or None
 if not OWNER_ID:
     logger.error("Переменная OWNER_TELEGRAM_ID не установлена или некорректна")
     raise RuntimeError("OWNER_TELEGRAM_ID is required")
-RENDER_URL = os.getenv("RENDER_URL", "https://your-app.onrender.com")
+RENDER_URL = os.getenv("RENDER_URL", "https://your-app.onrender.com  ")
 WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
+
+# --- Импорт для Google Sheets ---
+try:
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    GOOGLE_SHEETS_ENABLED = True
+    logger.info("gspread установлен. Интеграция с Google Sheets доступна.")
+except ImportError:
+    GOOGLE_SHEETS_ENABLED = False
+    logger.warning("gspread не установлен. Интеграция с Google Sheets отключена.")
 
 # --- Инициализация БД ---
 def init_db():
@@ -83,10 +93,128 @@ def init_db():
             user_id INTEGER PRIMARY KEY
         )
     ''')
+    # таблица рефералов
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS referrals (
+            user_id INTEGER PRIMARY KEY,
+            referral_code TEXT UNIQUE,
+            referred_by INTEGER,
+            referrals_count INTEGER DEFAULT 0,
+            bonus_points INTEGER DEFAULT 0,
+            date_registered TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
 init_db()
+
+# --- Интеграция с Google Sheets ---
+if GOOGLE_SHEETS_ENABLED:
+    def init_gspread():
+        try:
+            credentials_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH")
+            if not credentials_path:
+                logger.error("GOOGLE_SHEETS_CREDENTIALS_PATH не установлен")
+                return None
+                
+            scope = [
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
+            creds = ServiceAccountCredentials.from_json_keyfile_name(
+                credentials_path, 
+                scope
+            )
+            client = gspread.authorize(creds)
+            return client
+        except Exception as e:
+            logger.error(f"Ошибка инициализации Google Sheets: {e}")
+            return None
+
+    gs_client = init_gspread()
+    SPREADSHEET_ID = os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID")
+    
+    if not SPREADSHEET_ID:
+        logger.warning("GOOGLE_SHEETS_SPREADSHEET_ID не установлен")
+
+def log_order_to_google_sheets(order_id, user_id, username, item, quantity, price, total, date, status):
+    """Записывает информацию о заказе в Google Таблицу"""
+    if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
+        return False
+    
+    try:
+        sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Заказы")
+        # Добавляем новую строку
+        sheet.append_row([
+            order_id,
+            user_id,
+            username or f"ID:{user_id}",
+            item,
+            quantity,
+            price,
+            total,
+            date,
+            status,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Время записи
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка записи заказа в Google Sheets: {e}")
+        return False
+
+def log_subscription_to_google_sheets(user_id, date_subscribed):
+    """Записывает информацию о подписке в Google Таблицу"""
+    if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
+        return False
+    
+    try:
+        sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Подписчики")
+        sheet.append_row([
+            user_id,
+            date_subscribed,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Время записи
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка записи подписки в Google Sheets: {e}")
+        return False
+
+def log_user_to_google_sheets(user_id, date_registered):
+    """Записывает информацию о новом пользователе в Google Таблицу"""
+    if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
+        return False
+    
+    try:
+        sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Пользователи")
+        sheet.append_row([
+            user_id,
+            date_registered,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Время записи
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка записи пользователя в Google Sheets: {e}")
+        return False
+
+def log_referral_to_google_sheets(user_id, referrer_id, referral_code, date_registered):
+    """Записывает информацию о реферале в Google Таблицу"""
+    if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
+        return False
+    
+    try:
+        sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Рефералы")
+        sheet.append_row([
+            user_id,
+            referrer_id or "Нет",
+            referral_code,
+            date_registered,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Время записи
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка записи реферала в Google Sheets: {e}")
+        return False
 
 # --- Инициализация бота и Flask ---
 app = Flask(__name__)
@@ -251,6 +379,12 @@ def move_pending_to_orders(pending_id):
             "INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (user_id, username, item, qty, price, total_item, date_str, "В обработке")
         )
+        # Логируем заказ в Google Sheets
+        if GOOGLE_SHEETS_ENABLED:
+            order_id = cur.lastrowid
+            log_order_to_google_sheets(
+                order_id, user_id, username, item, qty, price, total_item, date_str, "В обработке"
+            )
     conn.commit()
     conn.close()
     # очистить корзину пользователя
@@ -267,8 +401,74 @@ def start(message):
         send_rate_limited_message(message.chat.id)
         return
     log_user(message.chat.id)
+    
+    # Проверяем, новый ли пользователь
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM referrals WHERE user_id=?", (message.chat.id,))
+    is_new_user = not bool(cur.fetchone())
+    
+    # Если это реферальный запуск (есть параметр в /start)
+    referrer_id = None
+    if len(message.text.split()) > 1:
+        ref_code = message.text.split()[1]
+        cur.execute("SELECT user_id FROM referrals WHERE referral_code=?", (ref_code,))
+        referrer = cur.fetchone()
+        if referrer:
+            referrer_id = referrer[0]
+    
+    # Если пользователь новый, добавляем его в БД
+    if is_new_user:
+        # Генерируем уникальный реферальный код
+        import random
+        import string
+        referral_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        
+        # Дата регистрации
+        date_registered = str(date.today())
+        
+        # Добавляем пользователя в таблицу referrals
+        cur.execute("""
+            INSERT INTO referrals (user_id, referral_code, referred_by, date_registered)
+            VALUES (?, ?, ?, ?)
+        """, (message.chat.id, referral_code, referrer_id, date_registered))
+        
+        # Если есть реферер, увеличиваем его счетчик
+        if referrer_id:
+            cur.execute("""
+                UPDATE referrals 
+                SET referrals_count = referrals_count + 1,
+                    bonus_points = bonus_points + 10  -- 10 баллов за приглашение
+                WHERE user_id = ?
+            """, (referrer_id,))
+            # Уведомляем реферера
+            try:
+                bot.send_message(referrer_id, f"🎉 Пользователь перешел по вашей реферальной ссылке! "
+                                           f"Вы получили 10 бонусных баллов. Всего приглашено: "
+                                           f"{cur.execute('SELECT referrals_count FROM referrals WHERE user_id=?', (referrer_id,)).fetchone()[0]}")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить реферера {referrer_id}: {e}")
+        
+        conn.commit()
+        
+        # Логируем пользователя в Google Sheets
+        if GOOGLE_SHEETS_ENABLED:
+            log_user_to_google_sheets(message.chat.id, date_registered)
+        
+        # Если есть реферер, логируем реферальную связь
+        if referrer_id:
+            log_referral_to_google_sheets(
+                message.chat.id, 
+                referrer_id, 
+                referral_code, 
+                date_registered
+            )
+    
+    conn.close()
+    
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(
+        types.KeyboardButton("👤 Личный кабинет"),
         types.KeyboardButton("👥 Команда"),
         types.KeyboardButton("🌍 Путешествия"),
         types.KeyboardButton("🧘 Кундалини-йога"),
@@ -277,12 +477,113 @@ def start(message):
         types.KeyboardButton("🎁 Доп. услуги")
     )
     bot.send_message(message.chat.id, "👋 Добро пожаловать!\n"
+                "👤 Личный кабинет — ваши заказы и реферальная программа\n"
                 "👥 Команда — познакомьтесь с нами\n"
                 "🌍 Путешествия — авторские туры и ретриты\n"
                 "🧘 Кундалини-йога — практика и трансформация\n"
                 "📸 Медиа — вдохновляющие фото и видео\n"
                 "🛍 Мерч — одежда и аксессуары ScanDream\n"
-                "🎁 Доп. услуги — Вы можете подписать на события и первым узнать наши будущие поездки!", reply_markup=kb)
+                "🎁 Доп. услуги — всё для вашего комфорта", reply_markup=kb)
+
+# --- Личный кабинет ---
+@bot.message_handler(func=lambda m: m.text == "👤 Личный кабинет")
+def personal_cabinet(message):
+    if not allowed_action(message.chat.id, "personal_cabinet"):
+        send_rate_limited_message(message.chat.id)
+        return
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("📦 Мои заказы", "📜 История покупок", "🔗 Реферальная ссылка", "🔙 Назад в меню")
+    bot.send_message(message.chat.id, "👤 Ваш личный кабинет", reply_markup=kb)
+
+# Обновляем обработчик "Мои заказы"
+@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
+def my_orders(message):
+    if not allowed_action(message.chat.id, "my_orders"):
+        send_rate_limited_message(message.chat.id)
+        return
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
+    rows = cur.fetchall()
+    conn.close()
+    if not rows:
+        bot.send_message(message.chat.id, "У вас нет заказов.")
+        personal_cabinet(message)
+        return
+    text_lines = []
+    for oid, item, qty, price, total, date_str, status in rows:
+        text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
+    bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
+    # Кнопка для возврата в личный кабинет
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("👤 Личный кабинет")
+    bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+
+# Добавляем обработчик для истории покупок
+@bot.message_handler(func=lambda m: m.text == "📜 История покупок")
+def purchase_history(message):
+    if not allowed_action(message.chat.id, "purchase_history"):
+        send_rate_limited_message(message.chat.id)
+        return
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    # Получаем все заказы пользователя
+    cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
+    rows = cur.fetchall()
+    conn.close()
+    if not rows:
+        bot.send_message(message.chat.id, "История покупок пуста.")
+        personal_cabinet(message)
+        return
+    # Формируем сообщение
+    text = "История ваших покупок:\n\n"
+    total_spent = 0
+    for oid, item, qty, price, total, date_str, status in rows:
+        text += f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}\n"
+        total_spent += total
+    if total_spent > 0:
+        text += f"\nОбщая сумма покупок: {total_spent}₽"
+    bot.send_message(message.chat.id, text)
+    # Кнопка для возврата в личный кабинет
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("👤 Личный кабинет")
+    bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+
+# Добавляем обработчик для реферальной ссылки
+@bot.message_handler(func=lambda m: m.text == "🔗 Реферальная ссылка")
+def referral_link(message):
+    if not allowed_action(message.chat.id, "referral_link"):
+        send_rate_limited_message(message.chat.id)
+        return
+    
+    conn = sqlite3.connect('bot_data.db')
+    cur = conn.cursor()
+    cur.execute("SELECT referral_code, referrals_count, bonus_points FROM referrals WHERE user_id=?", (message.chat.id,))
+    referral_info = cur.fetchone()
+    conn.close()
+    
+    if not referral_info:
+        bot.send_message(message.chat.id, "Ошибка: ваша реферальная информация не найдена.")
+        return
+    
+    referral_code, referrals_count, bonus_points = referral_info
+    referral_link = f"https://t.me/{bot.get_me().username}?start={referral_code}"
+    
+    response = f"Ваша реферальная ссылка:\n`{referral_link}`\n\n"
+    response += f"Вы пригласили: {referrals_count} человек\n"
+    response += f"Ваши бонусные баллы: {bonus_points}\n\n"
+    response += "Приглашайте друзей и получайте бонусы за каждое приглашение!\n\n"
+    response += "Как это работает:\n"
+    response += "1. Поделитесь ссылкой с друзьями\n"
+    response += "2. За каждого приглашенного получайте 10 баллов\n"
+    response += "3. 50 баллов = скидка 500₽ на мерч или путешествия"
+    
+    bot.send_message(message.chat.id, response, parse_mode="Markdown")
+    
+    # Кнопка для возврата в личный кабинет
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("👤 Личный кабинет")
+    bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
 
 # --- Разделы (сохранена логика) ---
 @bot.message_handler(func=lambda m: m.text == "🌍 Путешествия")
@@ -321,7 +622,7 @@ def try_online_yoga(message):
     if not allowed_action(message.chat.id, "try_online_yoga"):
         send_rate_limited_message(message.chat.id)
         return
-    bot.send_message(message.chat.id, "https://disk.yandex.ru/i/nCQFa8edIspzNA")
+    bot.send_message(message.chat.id, "https://disk.yandex.ru/i/nCQFa8edIspzNA  ")
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("Приобрести подписку", "🔙 Назад к онлайн-йоге")
     bot.send_message(message.chat.id, "Если вам понравилось и вы хотели бы дополнительно узнать больше о онлайн занятии, нажмите кнопку приобрести подписку и мы обязательно свяжемся с вами!", reply_markup=kb)
@@ -356,8 +657,8 @@ def upcoming_events(message):
         return
     bot.send_message(message.chat.id, """- 10 августа мы отправляемся в «Большой Волжский Путь», путешествие на автодоме из Карелии на фестиваль кундалини-йоги в Волгоград:
 
-7 августа - Тольятти - <a href="https://t.me/+PosQ9pcHMIk4NjQ6">Большой класс и саундхидинг</a>
-9 августа - Волгоград - <a href="https://t.me/+ii8MpmrGhMo2YTVi">Большой класс и саундхилинг</a>
+7 августа - Тольятти - <a href="https://t.me/+PosQ9pcHMIk4NjQ6  ">Большой класс и саундхидинг</a>
+9 августа - Волгоград - <a href="https://t.me/+ii8MpmrGhMo2YTVi  ">Большой класс и саундхилинг</a>
 10 августа - площадка 17 фестиваля кундалини-йоги - Большой класс.
 
 11 - 19 августа фестиваль кундалини-йоги (Волгоград)""", parse_mode="HTML")
@@ -367,7 +668,7 @@ def youtube_channel(message):
     if not allowed_action(message.chat.id, "youtube_channel"):
         send_rate_limited_message(message.chat.id)
         return
-    bot.send_message(message.chat.id, "https://www.youtube.com/@ScanDreamChannel")
+    bot.send_message(message.chat.id, "https://www.youtube.com/@ScanDreamChannel  ")
 
 @bot.message_handler(func=lambda m: m.text == "📸 Медиа")
 def media_menu(message):
@@ -399,6 +700,10 @@ def subscribe_events(message):
         cur.execute("INSERT OR IGNORE INTO subscriptions (user_id) VALUES (?)", (message.chat.id,))
         conn.commit()
         bot.send_message(message.chat.id, "Вы успешно подписались на события. Будем отправлять уведомления о новых ретритах и мероприятиях.")
+        
+        # Логируем подписку в Google Sheets
+        if GOOGLE_SHEETS_ENABLED:
+            log_subscription_to_google_sheets(message.chat.id, str(date.today()))
     except Exception as e:
         logger.error(f"Ошибка подписки: {e}")
         bot.send_message(message.chat.id, "Ошибка при подписке. Попробуйте позже.")
@@ -439,7 +744,7 @@ def about_brand(message):
     if not allowed_action(message.chat.id, "about_brand"):
         send_rate_limited_message(message.chat.id)
         return
-    bot.send_message(message.chat.id, """ScanDream - https://t.me/scandream - зарегистрированный товарный знак, основная идея которого осознанные творческие коммуникации. ScanDream - это место, где мы пересобираем конструкт Мира, рассматривая и восхищаясь его строением. Быть #scandream - это сканировать свое жизненное предназначение действием и мечтой. В реальности оставаться активным, осознанным и логичным, а мечтать широко, мощно, свободно и не ощущая предела. 
+    bot.send_message(message.chat.id, """ScanDream - https://t.me/scandream   - зарегистрированный товарный знак, основная идея которого осознанные творческие коммуникации. ScanDream - это место, где мы пересобираем конструкт Мира, рассматривая и восхищаясь его строением. Быть #scandream - это сканировать свое жизненное предназначение действием и мечтой. В реальности оставаться активным, осознанным и логичным, а мечтать широко, мощно, свободно и не ощущая предела. 
 Проект йога-кемп - это творческая интеграция опыта и пользы. Пользы через новые знания и умения. Умения через новые формы.""")
 
 @bot.message_handler(func=lambda m: m.text == "🌐 Официальные источники")
@@ -448,14 +753,21 @@ def official_sources(message):
         send_rate_limited_message(message.chat.id)
         return
     bot.send_message(message.chat.id, """ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ взаимодействия с командой ScanDream:
-1. Личная страница в ВК Алексея - https://vk.ru/scandream
-2. Моя личная страница в ВК - https://vk.ru/yoga.golik
-3. Официальный ТГ канал ScanDream•Live - https://t.me/scandream
-4. Личный ТГ канал Алексея - https://t.me/scandreamlife
-5. Личный мой ТГ канал - https://t.me/yogagolik_dnevnik
-6. Йога с Алексеем Бабенко в ВК (Петрозаводск) - https://vk.ru/kyogababenko""")
+1. Личная страница в ВК Алексея - https://vk.ru/scandream  
+2. Моя личная страница в ВК - https://vk.ru/yoga.golik  
+3. Официальный ТГ канал ScanDream•Live - https://t.me/scandream  
+4. Личный ТГ канал Алексея - https://t.me/scandreamlife  
+5. Личный мой ТГ канал - https://t.me/yogagolik_dnevnik  
+6. Йога с Алексеем Бабенко в ВК (Петрозаводск) - https://vk.ru/kyogababenko  """)
 
 # Назад
+@bot.message_handler(func=lambda m: m.text == "🔙 Назад в меню")
+def back_to_menu_from_cabinet(message):
+    if not allowed_action(message.chat.id, "back_to_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
+    start(message)
+
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад к меню")
 def back_to_menu(message):
     if not allowed_action(message.chat.id, "back_to_menu"):
@@ -914,4 +1226,3 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-
