@@ -14,15 +14,15 @@ from datetime import datetime, date
 # --- Определение пути к базе данных ---
 # Render.com предоставляет специальную директорию для хранения данных
 if os.getenv('RENDER_SERVICE_ID'):
-    # Работаем в Render.com
+    # Работаем в Render.com - директория /var/render/data уже существует
     DB_PATH = '/var/render/data/bot_data.db'
-    # Создаем директорию, если она не существует
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     logger = logging.getLogger(__name__)
     logger.info(f"Используется база данных в Render.com: {DB_PATH}")
 else:
     # Работаем локально
     DB_PATH = 'bot_data.db'
+    # Для локальной разработки создаем директорию, если она не существует
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     logger = logging.getLogger(__name__)
     logger.info(f"Используется локальная база данных: {DB_PATH}")
 
