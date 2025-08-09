@@ -1071,7 +1071,6 @@ def admin_command(message):
         types.InlineKeyboardButton("🔙 В главное меню", callback_data="admin_back")
     )
     bot.send_message(OWNER_ID, "Админ-панель (inline):", reply_markup=ikb)
-
 # --- ОСНОВНЫЕ ИЗМЕНЕНИЯ: Исправлены ошибки в админ-панели ---
 # --- Обработчик callback'ов (inline кнопки) ---
 @bot.callback_query_handler(func=lambda call: True)
@@ -1083,7 +1082,6 @@ def callback_query_handler(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         start(call.message)
         return
-    
     # ИСПРАВЛЕНО: добавлена обработка None значений для статистики
     if data == "admin_stats" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
@@ -1094,18 +1092,15 @@ def callback_query_handler(call: types.CallbackQuery):
                     "SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date = :today"
                 ), {"today": today})
                 today_count = result.fetchone()[0] or 0
-                
                 result = conn.execute(sql_text(
                     "SELECT COUNT(DISTINCT user_id) FROM user_log"
                 ))
                 total_count = result.fetchone()[0] or 0
-                
             bot.send_message(OWNER_ID, f"📊 Статистика\nСегодня: {today_count}\nЗа всё время: {total_count}")
         except Exception as e:
             logger.error(f"Ошибка получения статистики: {e}")
             bot.send_message(OWNER_ID, "Ошибка при получении статистики.")
         return
-    
     # ИСПРАВЛЕНО: улучшена обработка подписчиков
     if data == "admin_subscribers" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
@@ -1126,12 +1121,11 @@ def callback_query_handler(call: types.CallbackQuery):
                         lst.append(f"ID:{user_id}")
                 subscribers_list = ", ".join(lst)
                 # Добавляем информацию о количестве
-                bot.send_message(OWNER_ID, f"Подписчиков всего: {len(rows)}\n\n{subscribers_list}")
+                bot.send_message(OWNER_ID, f"Подписчиков всего: {len(rows)}\n{subscribers_list}")
         except Exception as e:
             logger.error(f"Ошибка получения подписчиков: {e}")
             bot.send_message(OWNER_ID, "Ошибка при получении списка подписчиков.")
         return
-    
     # ИСПРАВЛЕНО: Добавлено подтверждение рассылки
     if data == "admin_broadcast" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
@@ -1139,21 +1133,19 @@ def callback_query_handler(call: types.CallbackQuery):
         msg = bot.send_message(OWNER_ID, "Отправьте текст рассылки (будет отправлено всем подписчикам).")
         bot.register_next_step_handler(msg, prepare_broadcast)
         return
-    
     # ИСПРАВЛЕНО: Обновлен запрос к заказам, учитывающий структуру таблицы
     if data == "admin_orders" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
         try:
             with engine.connect() as conn:
-                # Исправленный запрос с учетом всех полей таблицы
+                # ИСПРАВЛЕНО: Добавлено условие WHERE status != 'Доставлен', чтобы скрыть доставленные заказы
                 result = conn.execute(sql_text(
-                    "SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders ORDER BY id DESC LIMIT 50"
+                    "SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders WHERE status != 'Доставлен' ORDER BY id DESC LIMIT 50"
                 ))
                 rows = result.fetchall()
             if not rows:
                 bot.send_message(OWNER_ID, "Заказов нет.")
                 return
-            
             # Для компактности покажем кнопки-переключатели на отдельные заказы
             ikb = types.InlineKeyboardMarkup(row_width=1)
             for row in rows:
@@ -1167,7 +1159,6 @@ def callback_query_handler(call: types.CallbackQuery):
             logger.error(f"Ошибка получения заказов: {e}")
             bot.send_message(OWNER_ID, "Ошибка при получении списка заказов.")
         return
-    
     # Открыть конкретный заказ (показать детали + кнопки изменения статуса)
     if data and data.startswith("open_order:") and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
@@ -1188,7 +1179,6 @@ def callback_query_handler(call: types.CallbackQuery):
                 return
             _, uid, username, item, qty, price, total, date_str, status = row
             text = f"Заказ #{oid}\nПользователь: {username or f'ID:{uid}'} ({uid})\nТовар: {item}\nКол-во: {qty}\nЦена: {price}₽/шт\nСумма: {total}₽\nДата: {date_str}\nСтатус: {status}"
-            
             # Кнопки для изменения статуса (исключая текущий)
             statuses = ["В обработке", "Отправлен", "Доставлен", "Отклонён"]
             ikb = types.InlineKeyboardMarkup(row_width=2)
@@ -1202,7 +1192,6 @@ def callback_query_handler(call: types.CallbackQuery):
             logger.error(f"Ошибка получения заказа: {e}")
             bot.send_message(OWNER_ID, f"Ошибка при получении заказа #{oid}.")
         return
-    
     # Изменить статус заказа (админ)
     if data and data.startswith("change_status:") and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
@@ -1239,7 +1228,6 @@ def callback_query_handler(call: types.CallbackQuery):
             logger.error(f"Ошибка изменения статуса заказа: {e}")
             bot.send_message(OWNER_ID, f"Ошибка при изменении статуса заказа #{oid}.")
         return
-    
     # Удалить заказ (админ)
     if data and data.startswith("delete_order:") and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
@@ -1268,7 +1256,6 @@ def callback_query_handler(call: types.CallbackQuery):
             logger.error(f"Ошибка удаления заказа: {e}")
             bot.send_message(OWNER_ID, f"Ошибка при удалении заказа #{oid}.")
         return
-    
     # Обработка подтверждения/отклонения pending заказов (владелец)
     if data and data.startswith("confirm_pending:") and user_id == OWNER_ID:
         bot.answer_callback_query(call.id, "Подтверждаю заказ")
@@ -1278,25 +1265,28 @@ def callback_query_handler(call: types.CallbackQuery):
             bot.send_message(OWNER_ID, "Неправильный id pending.")
             return
         try:
-            # переносим pending -> orders, очищаем корзину пользователя
+            # ИСПРАВЛЕНО: сначала получаем информацию о заказе, сохраняем ID пользователя, потом обрабатываем заказ
+            pending = get_pending(pid)
+            if not pending:
+                bot.send_message(OWNER_ID, f"Ожидающий заказ #{pid} не найден.")
+                return
+            _, uid, username, items_json, total, date_str = pending
+            
+            # Переносим pending -> orders, очищаем корзину пользователя
             ok = move_pending_to_orders(pid)
             if ok:
-                pending = get_pending(pid)
-                if pending:
-                    _, uid, username, items_json, total, date_str = pending
-                    bot.send_message(OWNER_ID, f"Заказ #{pid} подтверждён и перенесён в заказы.")
-                    # --- ИЗМЕНЕНО: улучшен текст уведомления клиенту ---
-                    try:
-                        bot.send_message(uid, f"Ваш заказ #{pid} подтвержден. Мы скоро свяжемся с вами! Все детали в личном кабинете.")
-                    except Exception as e:
-                        logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
+                bot.send_message(OWNER_ID, f"Заказ #{pid} подтверждён и перенесён в заказы.")
+                # Отправляем уведомление клиенту
+                try:
+                    bot.send_message(uid, f"Ваш заказ #{pid} подтвержден. Мы скоро свяжемся с вами! Все детали в личном кабинете.")
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
             else:
                 bot.send_message(OWNER_ID, "Ошибка при подтверждении заказа.")
         except Exception as e:
             logger.error(f"Ошибка подтверждения pending: {e}")
             bot.send_message(OWNER_ID, "Ошибка при подтверждении заказа.")
         return
-    
     if data and data.startswith("decline_pending:") and user_id == OWNER_ID:
         bot.answer_callback_query(call.id, "Отклоняю заказ")
         try:
@@ -1305,16 +1295,18 @@ def callback_query_handler(call: types.CallbackQuery):
             bot.send_message(OWNER_ID, "Неправильный id pending.")
             return
         try:
+            # ИСПРАВЛЕНО: сначала получаем информацию о заказе, сохраняем ID пользователя, потом обрабатываем заказ
             pending = get_pending(pid)
             if not pending:
                 bot.send_message(OWNER_ID, f"Ожидающий заказ #{pid} не найден.")
                 return
             _, uid, username, items_json, total, date_str = pending
-            # удаляем pending и очищаем корзину пользователя
+            
+            # Удаляем pending и очищаем корзину пользователя
             delete_pending(pid)
             clear_cart(uid)
             bot.send_message(OWNER_ID, f"Заказ #{pid} отклонён и удалён.")
-            # --- ИЗМЕНЕНО: улучшен текст уведомления клиенту ---
+            # Отправляем уведомление клиенту
             try:
                 bot.send_message(uid, f"Ваш заказ #{pid} отменен. Мы скоро свяжемся с вами! Все детали в личном кабинете.")
             except Exception as e:
@@ -1323,36 +1315,30 @@ def callback_query_handler(call: types.CallbackQuery):
             logger.error(f"Ошибка отклонения pending: {e}")
             bot.send_message(OWNER_ID, "Ошибка при отклонении заказа.")
         return
-    
     # fallback: неопознанный callback — просто ack
     try:
         bot.answer_callback_query(call.id)
     except:
         pass
-
 # --- ИСПРАВЛЕНО: Добавлено подтверждение для рассылки ---
 def prepare_broadcast(message):
     """Подготовка рассылки - запрос подтверждения"""
     if message.text is None:
         bot.send_message(OWNER_ID, "Ошибка: сообщение не содержит текста.")
         return
-    
     broadcast_text = message.text
-    
     # Создаем клавиатуру подтверждения
     ikb = types.InlineKeyboardMarkup()
     ikb.add(
         types.InlineKeyboardButton("✅ Отправить", callback_data=f"confirm_broadcast:{broadcast_text}"),
         types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_broadcast")
     )
-    
     # Отправляем сообщение с подтверждением
     bot.send_message(
         OWNER_ID,
-        f"Вы собираетесь отправить следующее сообщение всем подписчикам:\n\n{broadcast_text}\n\nОтправить рассылку?",
+        f"Вы собираетесь отправить следующее сообщение всем подписчикам:\n{broadcast_text}\nОтправить рассылку?",
         reply_markup=ikb
     )
-
 def confirm_broadcast(broadcast_text):
     """Фактическая отправка рассылки"""
     try:
@@ -1364,7 +1350,6 @@ def confirm_broadcast(broadcast_text):
         if not rows:
             bot.send_message(OWNER_ID, "Нет подписчиков для рассылки.")
             return
-        
         sent = 0
         failed = 0
         for (user_id,) in rows:
@@ -1374,61 +1359,49 @@ def confirm_broadcast(broadcast_text):
             except Exception as e:
                 logger.error(f"Ошибка при отправке рассылки {user_id}: {e}")
                 failed += 1
-        
         bot.send_message(OWNER_ID, f"Рассылка завершена.\nУспешно: {sent}\nОшибок: {failed}")
     except Exception as e:
         logger.error(f"Ошибка рассылки: {e}")
         bot.send_message(OWNER_ID, "Ошибка при выполнении рассылки.")
-
 # Обработчик для подтверждения рассылки
 @bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_broadcast:"))
 def handle_confirm_broadcast(call):
     if call.from_user.id != OWNER_ID:
         bot.answer_callback_query(call.id, "Вы не являетесь владельцем бота!")
         return
-    
     # Извлекаем текст рассылки из callback_data
     broadcast_text = call.data.split(":", 1)[1]
-    
     # Отправляем сообщение о начале рассылки
     bot.answer_callback_query(call.id, "Начинаем рассылку...")
-    
     # Удаляем сообщение с подтверждением
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except:
         pass
-    
     # Отправляем сообщение о процессе
     bot.send_message(OWNER_ID, "📤 Рассылка началась...")
-    
     # Запускаем рассылку
     confirm_broadcast(broadcast_text)
-
 # Обработчик для отмены рассылки
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_broadcast")
 def handle_cancel_broadcast(call):
     if call.from_user.id != OWNER_ID:
         bot.answer_callback_query(call.id, "Вы не являетесь владельцем бота!")
         return
-    
     bot.answer_callback_query(call.id, "Рассылка отменена")
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except:
         pass
     bot.send_message(OWNER_ID, "Рассылка отменена.")
-
 # --- Остальной webhook и запуск Flask ---
 @app.route("/")
 def index():
     return "Bot is running!"
-
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     update = types.Update.de_json(request.get_json(force=True))
     bot.process_new_updates([update])
     return "", 200
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
