@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- Константы ---
+# --- Константы (из Environment Variables) ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     logger.error("Переменная TELEGRAM_BOT_TOKEN не установлена")
@@ -101,6 +101,26 @@ MERCH_ITEMS = {
     "👕 Футболки":  (800, "tshirt.jpg")
 }
 
+# --- Rate limiting (защита от спама) ---
+# структура: last_action_time["{user_id}:{action}"] = timestamp
+last_action_time = {}
+DEFAULT_LIMIT_SECONDS = 2  # минимальное время между действиями
+
+def allowed_action(user_id: int, action: str, limit_seconds: int = DEFAULT_LIMIT_SECONDS):
+    key = f"{user_id}:{action}"
+    now = time.time()
+    last = last_action_time.get(key, 0)
+    if now - last < limit_seconds:
+        return False
+    last_action_time[key] = now
+    return True
+
+def send_rate_limited_message(chat_id):
+    try:
+        bot.send_message(chat_id, "⏳ Подожди немного перед следующим действием (защита от спама).")
+    except Exception as e:
+        logger.debug(f"Не удалось отправить сообщение о лимите: {e}")
+
 # --- Уникальные пользователи лог ---
 def log_user(user_id):
     today = str(date.today())
@@ -118,7 +138,7 @@ def send_daily_stats():
         now = datetime.now()
         if now.hour == 23 and now.minute == 59:
             today = str(date.today())
-            conn = sqlite3.connect("bot_data.db")
+            conn = sqlite3.connect('bot_data.db')
             cur = conn.cursor()
             cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date=?", (today,))
             count = cur.fetchone()[0]
@@ -171,7 +191,7 @@ def clear_cart(user_id):
 def create_pending_from_cart(user_id, username):
     """
     Создаёт запись в merch_pending на основе корзины (не очищает корзину).
-    Возвращает id pending.
+    Возвращает (pending_id, items_list, total_sum) или None если корзина пуста.
     """
     items = get_cart_items(user_id)
     if not items:
@@ -242,6 +262,10 @@ def move_pending_to_orders(pending_id):
 # --- Главное меню ---
 @bot.message_handler(commands=["start"])
 def start(message):
+    # rate limit for main /start
+    if not allowed_action(message.chat.id, "start", limit_seconds=1):
+        send_rate_limited_message(message.chat.id)
+        return
     log_user(message.chat.id)
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(
@@ -260,22 +284,31 @@ def start(message):
                 "🛍 Мерч — одежда и аксессуары ScanDream\n"
                 "🎁 Доп. услуги — всё для вашего комфорта", reply_markup=kb)
 
-# --- Разделы (сохранил логику) ---
+# --- Разделы (сохранена логика) ---
 @bot.message_handler(func=lambda m: m.text == "🌍 Путешествия")
 def travels_menu(message):
+    if not allowed_action(message.chat.id, "travels_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("📂 Архив путешествий", "🌍 Где мы сейчас", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "✈️ Путешествия: архив и текущее местоположение.", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: m.text == "🧘 Кундалини-йога")
 def yoga_menu(message):
+    if not allowed_action(message.chat.id, "yoga_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🏢 Офлайн-мероприятия", "💻 Онлайн-йога", "📅 Ближайшие мероприятия", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🧘 Кундалини-йога: офлайн, онлайн и ближайшие события.", reply_markup=kb)
 
-# --- Онлайн-йога (оставлено как есть) ---
+# --- Онлайн-йога (оставлено как есть, с rate limit где логично) ---
 @bot.message_handler(func=lambda m: m.text == "💻 Онлайн-йога")
 def online_yoga(message):
+    if not allowed_action(message.chat.id, "online_yoga"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("Да, хочу", "Приобрести подписку", "🔙 Назад к онлайн-йоге")
     bot.send_message(message.chat.id, """Это уникальная возможность быть в поле мастера онлайн. Практики диктуемые эпохой Водолея. Медитации. Работа в малых группах.
@@ -285,6 +318,9 @@ def online_yoga(message):
 
 @bot.message_handler(func=lambda m: m.text == "Да, хочу")
 def try_online_yoga(message):
+    if not allowed_action(message.chat.id, "try_online_yoga"):
+        send_rate_limited_message(message.chat.id)
+        return
     bot.send_message(message.chat.id, "https://disk.yandex.ru/i/nCQFa8edIspzNA")
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("Приобрести подписку", "🔙 Назад к онлайн-йоге")
@@ -292,6 +328,9 @@ def try_online_yoga(message):
 
 @bot.message_handler(func=lambda m: m.text == "Приобрести подписку")
 def buy_subscription(message):
+    if not allowed_action(message.chat.id, "buy_subscription"):
+        send_rate_limited_message(message.chat.id)
+        return
     # Отправляем информацию владельцу
     user_info = f"Пользователь @{message.from_user.username or message.chat.id} хочет приобрести подписку на онлайн-йогу."
     bot.send_message(OWNER_ID, user_info)
@@ -302,6 +341,9 @@ def buy_subscription(message):
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад к онлайн-йоге")
 def back_to_online_yoga_menu(message):
+    if not allowed_action(message.chat.id, "back_to_online_yoga"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🏢 Офлайн-мероприятия", "💻 Онлайн-йога", "📅 Ближайшие мероприятия", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🧘 Кундалини-йога: офлайн, онлайн и ближайшие события.", reply_markup=kb)
@@ -309,6 +351,9 @@ def back_to_online_yoga_menu(message):
 # --- Новые обработчики (как были) ---
 @bot.message_handler(func=lambda m: m.text == "📅 Ближайшие мероприятия")
 def upcoming_events(message):
+    if not allowed_action(message.chat.id, "upcoming_events"):
+        send_rate_limited_message(message.chat.id)
+        return
     bot.send_message(message.chat.id, """- 10 августа мы отправляемся в «Большой Волжский Путь», путешествие на автодоме из Карелии на фестиваль кундалини-йоги в Волгоград:
 
 7 августа - Тольятти - <a href="https://t.me/+PosQ9pcHMIk4NjQ6">Большой класс и саундхидинг</a>
@@ -319,10 +364,16 @@ def upcoming_events(message):
 
 @bot.message_handler(func=lambda m: m.text == "▶️ YouTube")
 def youtube_channel(message):
+    if not allowed_action(message.chat.id, "youtube_channel"):
+        send_rate_limited_message(message.chat.id)
+        return
     bot.send_message(message.chat.id, "https://www.youtube.com/@ScanDreamChannel")
 
 @bot.message_handler(func=lambda m: m.text == "📸 Медиа")
 def media_menu(message):
+    if not allowed_action(message.chat.id, "media_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("▶️ YouTube", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🎥 Медиа: наши видео на YouTube.", reply_markup=kb)
@@ -330,12 +381,18 @@ def media_menu(message):
 # --- Доп. услуги: подписка/отписка ---
 @bot.message_handler(func=lambda m: m.text == "🎁 Доп. услуги")
 def services_menu(message):
+    if not allowed_action(message.chat.id, "services_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("📢 Подписаться на события", "🚫 Отписаться от событий", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🔧 Дополнительные услуги: детали по запросу.", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: m.text == "📢 Подписаться на события")
 def subscribe_events(message):
+    if not allowed_action(message.chat.id, "subscribe_events"):
+        send_rate_limited_message(message.chat.id)
+        return
     conn = sqlite3.connect('bot_data.db')
     cur = conn.cursor()
     try:
@@ -350,6 +407,9 @@ def subscribe_events(message):
 
 @bot.message_handler(func=lambda m: m.text == "🚫 Отписаться от событий")
 def unsubscribe_events(message):
+    if not allowed_action(message.chat.id, "unsubscribe_events"):
+        send_rate_limited_message(message.chat.id)
+        return
     conn = sqlite3.connect('bot_data.db')
     cur = conn.cursor()
     try:
@@ -364,6 +424,9 @@ def unsubscribe_events(message):
 
 @bot.message_handler(func=lambda m: m.text == "👥 Команда")
 def team_menu(message):
+    if not allowed_action(message.chat.id, "team_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add("🏷 О бренде", "🌐 Официальные источники", "🔙 Назад к меню")
     bot.send_message(message.chat.id, """Нас зовут Алексей Бабенко — учитель кундалини-йоги, визионер, путешественник, кинематографист, медиа-продюсер.
@@ -373,11 +436,17 @@ def team_menu(message):
 
 @bot.message_handler(func=lambda m: m.text == "🏷 О бренде")
 def about_brand(message):
+    if not allowed_action(message.chat.id, "about_brand"):
+        send_rate_limited_message(message.chat.id)
+        return
     bot.send_message(message.chat.id, """ScanDream - https://t.me/scandream - зарегистрированный товарный знак, основная идея которого осознанные творческие коммуникации. ScanDream - это место, где мы пересобираем конструкт Мира, рассматривая и восхищаясь его строением. Быть #scandream - это сканировать свое жизненное предназначение действием и мечтой. В реальности оставаться активным, осознанным и логичным, а мечтать широко, мощно, свободно и не ощущая предела. 
 Проект йога-кемп - это творческая интеграция опыта и пользы. Пользы через новые знания и умения. Умения через новые формы.""")
 
 @bot.message_handler(func=lambda m: m.text == "🌐 Официальные источники")
 def official_sources(message):
+    if not allowed_action(message.chat.id, "official_sources"):
+        send_rate_limited_message(message.chat.id)
+        return
     bot.send_message(message.chat.id, """ОФИЦИАЛЬНЫЕ ИСТОЧНИКИ взаимодействия с командой ScanDream:
 1. Личная страница в ВК Алексея - https://vk.ru/scandream
 2. Моя личная страница в ВК - https://vk.ru/yoga.golik
@@ -389,11 +458,17 @@ def official_sources(message):
 # Назад
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад к меню")
 def back_to_menu(message):
+    if not allowed_action(message.chat.id, "back_to_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
     start(message)
 
 # --- Мерч: меню (добавлены кнопки "Мои заказы") ---
 @bot.message_handler(func=lambda m: m.text == "🛍 Мерч")
 def merch_menu(message):
+    if not allowed_action(message.chat.id, "merch_menu"):
+        send_rate_limited_message(message.chat.id)
+        return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     for name in MERCH_ITEMS:
         kb.add(types.KeyboardButton(name))
@@ -402,6 +477,9 @@ def merch_menu(message):
 
 @bot.message_handler(func=lambda m: m.text in MERCH_ITEMS)
 def show_merch_item(message):
+    if not allowed_action(message.chat.id, "show_merch_item"):
+        send_rate_limited_message(message.chat.id)
+        return
     name = message.text
     price, photo_file = MERCH_ITEMS[name]
     
@@ -466,6 +544,9 @@ def show_merch_item(message):
     bot.register_next_step_handler(msg, lambda m: merch_order_choice(m, name))
 
 def merch_order_choice(message, item_name):
+    if not allowed_action(message.chat.id, "merch_order_choice"):
+        send_rate_limited_message(message.chat.id)
+        return
     if message.text == "✅ Заказать":
         msg = bot.send_message(message.chat.id, "Сколько штук добавить?")
         bot.register_next_step_handler(msg, lambda m: add_merch_quantity(m, item_name))
@@ -473,6 +554,9 @@ def merch_order_choice(message, item_name):
         merch_menu(message)
 
 def add_merch_quantity(message, item_name):
+    if not allowed_action(message.chat.id, "add_merch_quantity", limit_seconds=2):
+        send_rate_limited_message(message.chat.id)
+        return
     try:
         qty = int(message.text)
         if qty < 1:
@@ -491,6 +575,9 @@ def add_merch_quantity(message, item_name):
 
 @bot.message_handler(func=lambda m: m.text == "🛍️ Корзина")
 def show_merch_cart(message):
+    if not allowed_action(message.chat.id, "show_merch_cart", limit_seconds=2):
+        send_rate_limited_message(message.chat.id)
+        return
     rows = get_cart_items(message.chat.id)
     if not rows:
         kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -510,12 +597,19 @@ def show_merch_cart(message):
 
 @bot.message_handler(func=lambda m: m.text == "🗑 Очистить корзину")
 def clear_cart_handler(message):
+    if not allowed_action(message.chat.id, "clear_cart", limit_seconds=1):
+        send_rate_limited_message(message.chat.id)
+        return
     clear_cart(message.chat.id)
     bot.send_message(message.chat.id, "Корзина очищена.")
     merch_menu(message)
 
 @bot.message_handler(func=lambda m: m.text == "✅ Оформить заказ")
 def send_merch_order(message):
+    # rate limit for sending order
+    if not allowed_action(message.chat.id, "send_merch_order", limit_seconds=3):
+        send_rate_limited_message(message.chat.id)
+        return
     # Создаём pending заказ и отправляем владельцу для подтверждения
     username = f"@{message.from_user.username}" if message.from_user.username else str(message.chat.id)
     res = create_pending_from_cart(message.chat.id, username)
@@ -541,11 +635,17 @@ def send_merch_order(message):
 
 @bot.message_handler(func=lambda m: m.text == "🔙 Назад к Мерч")
 def back_to_merch(message):
+    if not allowed_action(message.chat.id, "back_to_merch"):
+        send_rate_limited_message(message.chat.id)
+        return
     merch_menu(message)
 
 # --- Мои заказы (пользователь) ---
 @bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
 def my_orders(message):
+    if not allowed_action(message.chat.id, "my_orders"):
+        send_rate_limited_message(message.chat.id)
+        return
     conn = sqlite3.connect('bot_data.db')
     cur = conn.cursor()
     cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
@@ -581,7 +681,7 @@ def admin_command(message):
 def callback_query_handler(call: types.CallbackQuery):
     data = call.data
     user_id = call.from_user.id
-    # Только владелец может использовать админ inline
+    # Только владелец может использовать админ inline (кроме подтверждения pending/decline, тоже владельцу)
     if data == "admin_back" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
         start(call.message)
