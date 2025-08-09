@@ -1,6 +1,5 @@
 import os
 import logging
-import sqlite3
 import threading
 import time
 import requests
@@ -10,21 +9,9 @@ from flask import Flask, request
 import telebot
 from telebot import types
 from datetime import datetime, date
-
-# --- Определение пути к базе данных ---
-# Render.com предоставляет специальную директорию для хранения данных
-if os.getenv('RENDER_SERVICE_ID'):
-    # Работаем в Render.com - директория /var/render/data уже существует
-    DB_PATH = '/var/render/data/bot_data.db'
-    logger = logging.getLogger(__name__)
-    logger.info(f"Используется база данных в Render.com: {DB_PATH}")
-else:
-    # Работаем локально
-    DB_PATH = 'bot_data.db'
-    # Для локальной разработки создаем директорию, если она не существует
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    logger = logging.getLogger(__name__)
-    logger.info(f"Используется локальная база данных: {DB_PATH}")
+import sqlalchemy
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 
 # --- Настройка логирования ---
 logging.basicConfig(
@@ -45,6 +32,24 @@ if not OWNER_ID:
 RENDER_URL = os.getenv("RENDER_URL", "https://your-app.onrender.com  ")
 WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
 
+# --- Настройка PostgreSQL ---
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL:
+    # Заменяем префикс для SQLAlchemy
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    try:
+        engine = create_engine(DATABASE_URL)
+        # Проверяем подключение
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        logger.info("Успешное подключение к PostgreSQL")
+    except Exception as e:
+        logger.error(f"Ошибка подключения к PostgreSQL: {e}")
+        raise
+else:
+    logger.warning("Переменная DATABASE_URL не установлена. Бот может не работать корректно.")
+
 # --- Импорт для Google Sheets ---
 try:
     import gspread
@@ -57,81 +62,89 @@ except ImportError:
 
 # --- Инициализация БД ---
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    # корзина (с ценой)
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS merch_cart (
-            id INTEGER PRIMARY KEY,
-            user_id INTEGER,
-            item TEXT,
-            quantity INTEGER,
-            price INTEGER
-        )
-    ''')
-    # лог уникальных пользователей
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS user_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            date TEXT
-        )
-    ''')
-    # таблица заказов с статусами
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS merch_orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            item TEXT,
-            quantity INTEGER,
-            price INTEGER,
-            total INTEGER,
-            date TEXT,
-            status TEXT
-        )
-    ''')
-    # таблица отложенных (pending) заказов, ожидающих подтверждения владельца
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS merch_pending (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            items_json TEXT,
-            total INTEGER,
-            date TEXT
-        )
-    ''')
-    # подписчики на события
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS subscriptions (
-            user_id INTEGER PRIMARY KEY,
-            date_subscribed TEXT,
-            username TEXT
-        )
-    ''')
-    # таблица отписчиков
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS unsubscriptions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            date_unsubscribed TEXT,
-            username TEXT
-        )
-    ''')
-    # таблица рефералов
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS referrals (
-            user_id INTEGER PRIMARY KEY,
-            referral_code TEXT UNIQUE,
-            referred_by INTEGER,
-            referrals_count INTEGER DEFAULT 0,
-            bonus_points INTEGER DEFAULT 0,
-            date_registered TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    try:
+        with engine.connect() as conn:
+            # корзина (с ценой)
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS merch_cart (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    item TEXT,
+                    quantity INTEGER,
+                    price INTEGER
+                )
+            '''))
+            
+            # лог уникальных пользователей
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS user_log (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    date TEXT
+                )
+            '''))
+            
+            # таблица заказов с статусами
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS merch_orders (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    username TEXT,
+                    item TEXT,
+                    quantity INTEGER,
+                    price INTEGER,
+                    total INTEGER,
+                    date TEXT,
+                    status TEXT
+                )
+            '''))
+            
+            # таблица отложенных (pending) заказов, ожидающих подтверждения владельца
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS merch_pending (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    username TEXT,
+                    items_json TEXT,
+                    total INTEGER,
+                    date TEXT
+                )
+            '''))
+            
+            # подписчики на события
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS subscriptions (
+                    user_id INTEGER PRIMARY KEY,
+                    date_subscribed TEXT,
+                    username TEXT
+                )
+            '''))
+            
+            # таблица отписчиков
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS unsubscriptions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    date_unsubscribed TEXT,
+                    username TEXT
+                )
+            '''))
+            
+            # таблица рефералов
+            conn.execute(text('''
+                CREATE TABLE IF NOT EXISTS referrals (
+                    user_id INTEGER PRIMARY KEY,
+                    referral_code TEXT UNIQUE,
+                    referred_by INTEGER,
+                    referrals_count INTEGER DEFAULT 0,
+                    bonus_points INTEGER DEFAULT 0,
+                    date_registered TEXT
+                )
+            '''))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка инициализации базы данных: {e}")
+        raise
 
 init_db()
 
@@ -299,13 +312,19 @@ def send_rate_limited_message(chat_id):
 # --- Уникальные пользователи лог ---
 def log_user(user_id):
     today = str(date.today())
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM user_log WHERE user_id=? AND date=?", (user_id, today))
-    if not cur.fetchone():
-        cur.execute("INSERT INTO user_log (user_id, date) VALUES (?, ?)", (user_id, today))
-        conn.commit()
-    conn.close()
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT 1 FROM user_log WHERE user_id = :user_id AND date = :today"
+            ), {"user_id": user_id, "today": today})
+            
+            if not result.fetchone():
+                conn.execute(text(
+                    "INSERT INTO user_log (user_id, date) VALUES (:user_id, :today)"
+                ), {"user_id": user_id, "today": today})
+                conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка записи в БД: {e}")
 
 # --- Рассылка статистики владельцу (ежедневно в 23:59) ---
 def send_daily_stats():
@@ -313,15 +332,18 @@ def send_daily_stats():
         now = datetime.now()
         if now.hour == 23 and now.minute == 59:
             today = str(date.today())
-            conn = sqlite3.connect(DB_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date=?", (today,))
-            count = cur.fetchone()[0]
-            conn.close()
             try:
-                bot.send_message(OWNER_ID, f"📊 Уникальных пользователей за {today}: {count}")
+                with engine.connect() as conn:
+                    result = conn.execute(text(
+                        "SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date = :today"
+                    ), {"today": today})
+                    count = result.fetchone()[0]
+                try:
+                    bot.send_message(OWNER_ID, f"📊 Уникальных пользователей за {today}: {count}")
+                except Exception as e:
+                    logger.error(f"Ошибка при отправке статистики владельцу: {e}")
             except Exception as e:
-                logger.error(f"Ошибка при отправке статистики владельцу: {e}")
+                logger.error(f"Ошибка получения статистики: {e}")
             time.sleep(60)  # ждать минуту, чтобы не продублировать
         time.sleep(10)
 
@@ -341,27 +363,41 @@ threading.Thread(target=self_ping, daemon=True).start()
 
 # --- Вспомогательные DB-функции ---
 def add_to_cart_db(user_id, item, quantity, price):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("INSERT INTO merch_cart (user_id, item, quantity, price) VALUES (?, ?, ?, ?)",
-                (user_id, item, quantity, price))
-    conn.commit()
-    conn.close()
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "INSERT INTO merch_cart (user_id, item, quantity, price) VALUES (:user_id, :item, :quantity, :price)"
+            ), {
+                "user_id": user_id,
+                "item": item,
+                "quantity": quantity,
+                "price": price
+            })
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка добавления в корзину: {e}")
 
 def get_cart_items(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT item, quantity, price FROM merch_cart WHERE user_id=?", (user_id,))
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT item, quantity, price FROM merch_cart WHERE user_id = :user_id"
+            ), {"user_id": user_id})
+            rows = result.fetchall()
+            return rows
+    except Exception as e:
+        logger.error(f"Ошибка получения корзины: {e}")
+        return []
 
 def clear_cart(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM merch_cart WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "DELETE FROM merch_cart WHERE user_id = :user_id"
+            ), {"user_id": user_id})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка очистки корзины: {e}")
 
 def create_pending_from_cart(user_id, username):
     """
@@ -379,29 +415,46 @@ def create_pending_from_cart(user_id, username):
         total_sum += total
         items_list.append({"item": item, "quantity": qty, "price": price, "total": total})
     items_json = json.dumps(items_list, ensure_ascii=False)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("INSERT INTO merch_pending (user_id, username, items_json, total, date) VALUES (?, ?, ?, ?, ?)",
-                (user_id, username, items_json, total_sum, today))
-    pid = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return pid, items_list, total_sum
+    
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "INSERT INTO merch_pending (user_id, username, items_json, total, date) VALUES (:user_id, :username, :items_json, :total, :date) RETURNING id"
+            ), {
+                "user_id": user_id,
+                "username": username,
+                "items_json": items_json,
+                "total": total_sum,
+                "date": today
+            })
+            pid = result.fetchone()[0]
+            conn.commit()
+            return pid, items_list, total_sum
+    except Exception as e:
+        logger.error(f"Ошибка создания pending заказа: {e}")
+        return None
 
 def get_pending(pending_id):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, user_id, username, items_json, total, date FROM merch_pending WHERE id=?", (pending_id,))
-    row = cur.fetchone()
-    conn.close()
-    return row
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT id, user_id, username, items_json, total, date FROM merch_pending WHERE id = :pending_id"
+            ), {"pending_id": pending_id})
+            row = result.fetchone()
+            return row
+    except Exception as e:
+        logger.error(f"Ошибка получения pending: {e}")
+        return None
 
 def delete_pending(pending_id):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM merch_pending WHERE id=?", (pending_id,))
-    conn.commit()
-    conn.close()
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "DELETE FROM merch_pending WHERE id = :pending_id"
+            ), {"pending_id": pending_id})
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка удаления pending: {e}")
 
 def move_pending_to_orders(pending_id):
     """
@@ -415,30 +468,42 @@ def move_pending_to_orders(pending_id):
         items = json.loads(items_json)
     except:
         items = []
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    for it in items:
-        item = it.get("item")
-        qty = int(it.get("quantity", 0))
-        price = int(it.get("price", 0))
-        total_item = int(it.get("total", qty * price))
-        cur.execute(
-            "INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (user_id, username, item, qty, price, total_item, date_str, "В обработке")
-        )
-        # Логируем заказ в Google Sheets
-        if GOOGLE_SHEETS_ENABLED:
-            order_id = cur.lastrowid
-            log_order_to_google_sheets(
-                order_id, user_id, username, item, qty, price, total_item, date_str, "В обработке"
-            )
-    conn.commit()
-    conn.close()
-    # очистить корзину пользователя
-    clear_cart(user_id)
-    # удалить pending
-    delete_pending(pending_id)
-    return True
+    
+    try:
+        with engine.connect() as conn:
+            for it in items:
+                item = it.get("item")
+                qty = int(it.get("quantity", 0))
+                price = int(it.get("price", 0))
+                total_item = int(it.get("total", qty * price))
+                conn.execute(text(
+                    "INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status) VALUES (:user_id, :username, :item, :quantity, :price, :total, :date, :status)"
+                ), {
+                    "user_id": user_id,
+                    "username": username,
+                    "item": item,
+                    "quantity": qty,
+                    "price": price,
+                    "total": total_item,
+                    "date": date_str,
+                    "status": "В обработке"
+                })
+                # Логируем заказ в Google Sheets
+                if GOOGLE_SHEETS_ENABLED:
+                    order_id = conn.execute(text("SELECT LASTVAL()")).fetchone()[0]
+                    log_order_to_google_sheets(
+                        order_id, user_id, username, item, qty, price, total_item, date_str, "В обработке"
+                    )
+            
+            # очистить корзину пользователя
+            clear_cart(user_id)
+            # удалить pending
+            delete_pending(pending_id)
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"Ошибка переноса pending в заказы: {e}")
+        return False
 
 # --- Главное меню ---
 @bot.message_handler(commands=["start"])
@@ -453,19 +518,30 @@ def start(message):
     username = f"@{message.from_user.username}" if message.from_user.username else None
     
     # Проверяем, новый ли пользователь
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT 1 FROM referrals WHERE user_id=?", (message.chat.id,))
-    is_new_user = not bool(cur.fetchone())
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT 1 FROM referrals WHERE user_id = :user_id"
+            ), {"user_id": message.chat.id})
+            is_new_user = not bool(result.fetchone())
+    except Exception as e:
+        logger.error(f"Ошибка проверки пользователя: {e}")
+        is_new_user = True
     
     # Если это реферальный запуск (есть параметр в /start)
     referrer_id = None
     if len(message.text.split()) > 1:
         ref_code = message.text.split()[1]
-        cur.execute("SELECT user_id FROM referrals WHERE referral_code=?", (ref_code,))
-        referrer = cur.fetchone()
-        if referrer:
-            referrer_id = referrer[0]
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT user_id FROM referrals WHERE referral_code = :ref_code"
+                ), {"ref_code": ref_code})
+                referrer = result.fetchone()
+                if referrer:
+                    referrer_id = referrer[0]
+        except Exception as e:
+            logger.error(f"Ошибка проверки реферального кода: {e}")
     
     # Если пользователь новый, добавляем его в БД
     if is_new_user:
@@ -478,28 +554,38 @@ def start(message):
         date_registered = str(date.today())
         
         # Добавляем пользователя в таблицу referrals
-        cur.execute("""
-            INSERT INTO referrals (user_id, referral_code, referred_by, date_registered)
-            VALUES (?, ?, ?, ?)
-        """, (message.chat.id, referral_code, referrer_id, date_registered))
-        
-        # Если есть реферер, увеличиваем его счетчик
-        if referrer_id:
-            cur.execute("""
-                UPDATE referrals 
-                SET referrals_count = referrals_count + 1,
-                    bonus_points = bonus_points + 10  -- 10 баллов за приглашение
-                WHERE user_id = ?
-            """, (referrer_id,))
-            # Уведомляем реферера
-            try:
-                bot.send_message(referrer_id, f"🎉 Пользователь перешел по вашей реферальной ссылке! "
-                                           f"Вы получили 10 бонусных баллов. Всего приглашено: "
-                                           f"{cur.execute('SELECT referrals_count FROM referrals WHERE user_id=?', (referrer_id,)).fetchone()[0]}")
-            except Exception as e:
-                logger.error(f"Не удалось уведомить реферера {referrer_id}: {e}")
-        
-        conn.commit()
+        try:
+            with engine.connect() as conn:
+                conn.execute(text(
+                    "INSERT INTO referrals (user_id, referral_code, referred_by, date_registered) VALUES (:user_id, :referral_code, :referred_by, :date_registered)"
+                ), {
+                    "user_id": message.chat.id,
+                    "referral_code": referral_code,
+                    "referred_by": referrer_id,
+                    "date_registered": date_registered
+                })
+                conn.commit()
+                
+                # Если есть реферер, увеличиваем его счетчик
+                if referrer_id:
+                    conn.execute(text(
+                        "UPDATE referrals SET referrals_count = referrals_count + 1, bonus_points = bonus_points + 10 WHERE user_id = :referrer_id"
+                    ), {"referrer_id": referrer_id})
+                    conn.commit()
+                    
+                    # Уведомляем реферера
+                    try:
+                        with engine.connect() as conn2:
+                            result = conn2.execute(text(
+                                "SELECT referrals_count FROM referrals WHERE user_id = :referrer_id"
+                            ), {"referrer_id": referrer_id})
+                            referrals_count = result.fetchone()[0]
+                        bot.send_message(referrer_id, f"🎉 Пользователь перешел по вашей реферальной ссылке! "
+                                                   f"Вы получили 10 бонусных баллов. Всего приглашено: {referrals_count}")
+                    except Exception as e:
+                        logger.error(f"Не удалось уведомить реферера {referrer_id}: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка добавления пользователя в referrals: {e}")
         
         # Логируем пользователя в Google Sheets
         if GOOGLE_SHEETS_ENABLED:
@@ -514,8 +600,6 @@ def start(message):
                 date_registered,
                 username
             )
-    
-    conn.close()
     
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(
@@ -552,23 +636,32 @@ def my_orders(message):
     if not allowed_action(message.chat.id, "my_orders"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
-    rows = cur.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(message.chat.id, "У вас нет заказов.")
-        personal_cabinet(message)
-        return
-    text_lines = []
-    for oid, item, qty, price, total, date_str, status in rows:
-        text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
-    bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
-    # Кнопка для возврата в личный кабинет
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("👤 Личный кабинет")
-    bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
+            ), {"user_id": message.chat.id})
+            rows = result.fetchall()
+        
+        if not rows:
+            bot.send_message(message.chat.id, "У вас нет заказов.")
+            personal_cabinet(message)
+            return
+        
+        text_lines = []
+        for row in rows:
+            oid, item, qty, price, total, date_str, status = row
+            text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
+        
+        bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
+        
+        # Кнопка для возврата в личный кабинет
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.add("👤 Личный кабинет")
+        bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"Ошибка получения заказов: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении ваших заказов. Попробуйте позже.")
 
 # Добавляем обработчик для истории покупок
 @bot.message_handler(func=lambda m: m.text == "📜 История покупок")
@@ -576,29 +669,38 @@ def purchase_history(message):
     if not allowed_action(message.chat.id, "purchase_history"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    # Получаем все заказы пользователя
-    cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
-    rows = cur.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(message.chat.id, "История покупок пуста.")
-        personal_cabinet(message)
-        return
-    # Формируем сообщение
-    text = "История ваших покупок:\n\n"
-    total_spent = 0
-    for oid, item, qty, price, total, date_str, status in rows:
-        text += f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}\n"
-        total_spent += total
-    if total_spent > 0:
-        text += f"\nОбщая сумма покупок: {total_spent}₽"
-    bot.send_message(message.chat.id, text)
-    # Кнопка для возврата в личный кабинет
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("👤 Личный кабинет")
-    bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
+            ), {"user_id": message.chat.id})
+            rows = result.fetchall()
+        
+        if not rows:
+            bot.send_message(message.chat.id, "История покупок пуста.")
+            personal_cabinet(message)
+            return
+        
+        # Формируем сообщение
+        text = "История ваших покупок:\n\n"
+        total_spent = 0
+        for row in rows:
+            oid, item, qty, price, total, date_str, status = row
+            text += f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}\n"
+            total_spent += total
+        
+        if total_spent > 0:
+            text += f"\nОбщая сумма покупок: {total_spent}₽"
+        
+        bot.send_message(message.chat.id, text)
+        
+        # Кнопка для возврата в личный кабинет
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.add("👤 Личный кабинет")
+        bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"Ошибка получения истории покупок: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении истории покупок. Попробуйте позже.")
 
 # Добавляем обработчик для реферальной ссылки
 @bot.message_handler(func=lambda m: m.text == "🔗 Реферальная ссылка")
@@ -607,34 +709,38 @@ def referral_link(message):
         send_rate_limited_message(message.chat.id)
         return
     
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT referral_code, referrals_count, bonus_points FROM referrals WHERE user_id=?", (message.chat.id,))
-    referral_info = cur.fetchone()
-    conn.close()
-    
-    if not referral_info:
-        bot.send_message(message.chat.id, "Ошибка: ваша реферальная информация не найдена.")
-        return
-    
-    referral_code, referrals_count, bonus_points = referral_info
-    referral_link = f"https://t.me/{bot.get_me().username}?start={referral_code}"
-    
-    response = f"Ваша реферальная ссылка:\n`{referral_link}`\n\n"
-    response += f"Вы пригласили: {referrals_count} человек\n"
-    response += f"Ваши бонусные баллы: {bonus_points}\n\n"
-    response += "Приглашайте друзей и получайте бонусы за каждое приглашение!\n\n"
-    response += "Как это работает:\n"
-    response += "1. Поделитесь ссылкой с друзьями\n"
-    response += "2. За каждого приглашенного получайте 10 баллов\n"
-    response += "3. 50 баллов = скидка 500₽ на мерч или путешествия"
-    
-    bot.send_message(message.chat.id, response, parse_mode="Markdown")
-    
-    # Кнопка для возврата в личный кабинет
-    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("👤 Личный кабинет")
-    bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT referral_code, referrals_count, bonus_points FROM referrals WHERE user_id = :user_id"
+            ), {"user_id": message.chat.id})
+            referral_info = result.fetchone()
+        
+        if not referral_info:
+            bot.send_message(message.chat.id, "Ошибка: ваша реферальная информация не найдена.")
+            return
+        
+        referral_code, referrals_count, bonus_points = referral_info
+        referral_link = f"https://t.me/{bot.get_me().username}?start={referral_code}"
+        
+        response = f"Ваша реферальная ссылка:\n`{referral_link}`\n\n"
+        response += f"Вы пригласили: {referrals_count} человек\n"
+        response += f"Ваши бонусные баллы: {bonus_points}\n\n"
+        response += "Приглашайте друзей и получайте бонусы за каждое приглашение!\n\n"
+        response += "Как это работает:\n"
+        response += "1. Поделитесь ссылкой с друзьями\n"
+        response += "2. За каждого приглашенного получайте 10 баллов\n"
+        response += "3. 50 баллов = скидка 500₽ на мерч или путешествия"
+        
+        bot.send_message(message.chat.id, response, parse_mode="Markdown")
+        
+        # Кнопка для возврата в личный кабинет
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        kb.add("👤 Личный кабинет")
+        bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"Ошибка получения реферальной информации: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении реферальной информации. Попробуйте позже.")
 
 # --- Разделы (сохранена логика) ---
 @bot.message_handler(func=lambda m: m.text == "🌍 Путешествия")
@@ -745,25 +851,35 @@ def subscribe_events(message):
     if not allowed_action(message.chat.id, "subscribe_events"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
     try:
         # Получаем username пользователя
         username = f"@{message.from_user.username}" if message.from_user.username else None
         date_subscribed = str(date.today())
         
-        # Проверяем, не отписывался ли пользователь ранее
-        cur.execute("SELECT 1 FROM unsubscriptions WHERE user_id=?", (message.chat.id,))
-        was_unsubscribed = bool(cur.fetchone())
+        with engine.connect() as conn:
+            # Проверяем, не отписывался ли пользователь ранее
+            result = conn.execute(text(
+                "SELECT 1 FROM unsubscriptions WHERE user_id = :user_id"
+            ), {"user_id": message.chat.id})
+            was_unsubscribed = bool(result.fetchone())
+            
+            # Если ранее отписывался, удаляем из таблицы отписчиков
+            if was_unsubscribed:
+                conn.execute(text(
+                    "DELETE FROM unsubscriptions WHERE user_id = :user_id"
+                ), {"user_id": message.chat.id})
+            
+            # Добавляем в подписчики
+            conn.execute(text(
+                "INSERT INTO subscriptions (user_id, date_subscribed, username) VALUES (:user_id, :date_subscribed, :username) " +
+                "ON CONFLICT (user_id) DO UPDATE SET date_subscribed = EXCLUDED.date_subscribed, username = EXCLUDED.username"
+            ), {
+                "user_id": message.chat.id,
+                "date_subscribed": date_subscribed,
+                "username": username
+            })
+            conn.commit()
         
-        # Если ранее отписывался, удаляем из таблицы отписчиков
-        if was_unsubscribed:
-            cur.execute("DELETE FROM unsubscriptions WHERE user_id=?", (message.chat.id,))
-        
-        # Добавляем в подписчики
-        cur.execute("INSERT OR REPLACE INTO subscriptions (user_id, date_subscribed, username) VALUES (?, ?, ?)", 
-                   (message.chat.id, date_subscribed, username))
-        conn.commit()
         bot.send_message(message.chat.id, "Вы успешно подписались на события. Будем отправлять уведомления о новых ретритах и мероприятиях.")
         
         # Логируем подписку в Google Sheets
@@ -772,28 +888,33 @@ def subscribe_events(message):
     except Exception as e:
         logger.error(f"Ошибка подписки: {e}")
         bot.send_message(message.chat.id, "Ошибка при подписке. Попробуйте позже.")
-    finally:
-        conn.close()
 
 @bot.message_handler(func=lambda m: m.text == "🚫 Отписаться от событий")
 def unsubscribe_events(message):
     if not allowed_action(message.chat.id, "unsubscribe_events"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
     try:
         # Получаем username пользователя
         username = f"@{message.from_user.username}" if message.from_user.username else None
         date_unsubscribed = str(date.today())
         
-        # Удаляем из подписчиков
-        cur.execute("DELETE FROM subscriptions WHERE user_id=?", (message.chat.id,))
+        with engine.connect() as conn:
+            # Удаляем из подписчиков
+            conn.execute(text(
+                "DELETE FROM subscriptions WHERE user_id = :user_id"
+            ), {"user_id": message.chat.id})
+            
+            # Добавляем в отписчики
+            conn.execute(text(
+                "INSERT INTO unsubscriptions (user_id, date_unsubscribed, username) VALUES (:user_id, :date_unsubscribed, :username)"
+            ), {
+                "user_id": message.chat.id,
+                "date_unsubscribed": date_unsubscribed,
+                "username": username
+            })
+            conn.commit()
         
-        # Добавляем в отписчики
-        cur.execute("INSERT INTO unsubscriptions (user_id, date_unsubscribed, username) VALUES (?, ?, ?)", 
-                   (message.chat.id, date_unsubscribed, username))
-        conn.commit()
         bot.send_message(message.chat.id, "Вы отписаны от рассылки событий.")
         
         # Логируем отписку в Google Sheets
@@ -802,8 +923,6 @@ def unsubscribe_events(message):
     except Exception as e:
         logger.error(f"Ошибка отписки: {e}")
         bot.send_message(message.chat.id, "Ошибка при отписке. Попробуйте позже.")
-    finally:
-        conn.close()
 
 @bot.message_handler(func=lambda m: m.text == "👥 Команда")
 def team_menu(message):
@@ -1036,20 +1155,28 @@ def my_orders(message):
     if not allowed_action(message.chat.id, "my_orders"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
-    rows = cur.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(message.chat.id, "У вас нет заказов.")
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
+            ), {"user_id": message.chat.id})
+            rows = result.fetchall()
+        
+        if not rows:
+            bot.send_message(message.chat.id, "У вас нет заказов.")
+            merch_menu(message)
+            return
+        
+        text_lines = []
+        for row in rows:
+            oid, item, qty, price, total, date_str, status = row
+            text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
+        
+        bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
         merch_menu(message)
-        return
-    text_lines = []
-    for oid, item, qty, price, total, date_str, status in rows:
-        text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
-    bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
-    merch_menu(message)
+    except Exception as e:
+        logger.error(f"Ошибка получения заказов: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении ваших заказов. Попробуйте позже.")
 
 # --- Админ-панель (inline) и команды владельца ---
 @bot.message_handler(commands=['admin'])
@@ -1079,29 +1206,42 @@ def callback_query_handler(call: types.CallbackQuery):
 
     if data == "admin_stats" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        today = str(date.today())
-        cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date=?", (today,))
-        today_count = cur.fetchone()[0]
-        cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log")
-        total_count = cur.fetchone()[0]
-        conn.close()
-        bot.send_message(OWNER_ID, f"📊 Статистика\nСегодня: {today_count}\nЗа всё время: {total_count}")
+        try:
+            with engine.connect() as conn:
+                today = str(date.today())
+                result = conn.execute(text(
+                    "SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date = :today"
+                ), {"today": today})
+                today_count = result.fetchone()[0]
+                
+                result = conn.execute(text(
+                    "SELECT COUNT(DISTINCT user_id) FROM user_log"
+                ))
+                total_count = result.fetchone()[0]
+            
+            bot.send_message(OWNER_ID, f"📊 Статистика\nСегодня: {today_count}\nЗа всё время: {total_count}")
+        except Exception as e:
+            logger.error(f"Ошибка получения статистики: {e}")
+            bot.send_message(OWNER_ID, "Ошибка при получении статистики.")
         return
 
     if data == "admin_subscribers" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT user_id, username FROM subscriptions")
-        rows = cur.fetchall()
-        conn.close()
-        if not rows:
-            bot.send_message(OWNER_ID, "Нет подписчиков.")
-        else:
-            lst = ", ".join([f"{username or f'ID:{user_id}'}" for user_id, username in rows])
-            bot.send_message(OWNER_ID, f"Подписчики: {lst}")
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT user_id, username FROM subscriptions"
+                ))
+                rows = result.fetchall()
+            
+            if not rows:
+                bot.send_message(OWNER_ID, "Нет подписчиков.")
+            else:
+                lst = ", ".join([f"{username or f'ID:{user_id}'}" for user_id, username in rows])
+                bot.send_message(OWNER_ID, f"Подписчики: {lst}")
+        except Exception as e:
+            logger.error(f"Ошибка получения подписчиков: {e}")
+            bot.send_message(OWNER_ID, "Ошибка при получении списка подписчиков.")
         return
 
     if data == "admin_broadcast" and user_id == OWNER_ID:
@@ -1114,21 +1254,28 @@ def callback_query_handler(call: types.CallbackQuery):
     # показать список заказов (админ)
     if data == "admin_orders" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT id, user_id, username, item, quantity, total, date, status FROM merch_orders ORDER BY id DESC LIMIT 50")
-        rows = cur.fetchall()
-        conn.close()
-        if not rows:
-            bot.send_message(OWNER_ID, "Заказов нет.")
-            return
-        # для компактности покажем кнопки-переключатели на отдельные заказы
-        ikb = types.InlineKeyboardMarkup(row_width=1)
-        for oid, uid, username, item, qty, total, date_str, status in rows:
-            label = f"#{oid} | {username or f'ID:{uid}'} | {item}×{qty} | {total}₽ | {status}"
-            ikb.add(types.InlineKeyboardButton(label, callback_data=f"open_order:{oid}"))
-        ikb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back"))
-        bot.send_message(OWNER_ID, "Последние заказы (нажмите для управления):", reply_markup=ikb)
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT id, user_id, username, item, quantity, total, date, status FROM merch_orders ORDER BY id DESC LIMIT 50"
+                ))
+                rows = result.fetchall()
+            
+            if not rows:
+                bot.send_message(OWNER_ID, "Заказов нет.")
+                return
+            
+            # для компактности покажем кнопки-переключатели на отдельные заказы
+            ikb = types.InlineKeyboardMarkup(row_width=1)
+            for row in rows:
+                oid, uid, username, item, qty, total, date_str, status = row
+                label = f"#{oid} | {username or f'ID:{uid}'} | {item}×{qty} | {total}₽ | {status}"
+                ikb.add(types.InlineKeyboardButton(label, callback_data=f"open_order:{oid}"))
+            ikb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back"))
+            bot.send_message(OWNER_ID, "Последние заказы (нажмите для управления):", reply_markup=ikb)
+        except Exception as e:
+            logger.error(f"Ошибка получения заказов: {e}")
+            bot.send_message(OWNER_ID, "Ошибка при получении списка заказов.")
         return
 
     # открыть конкретный заказ (показать детали + кнопки изменения статуса)
@@ -1139,25 +1286,33 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный id заказа.")
             return
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders WHERE id=?", (oid,))
-        row = cur.fetchone()
-        conn.close()
-        if not row:
-            bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
-            return
-        _, uid, username, item, qty, price, total, date_str, status = row
-        text = f"Заказ #{oid}\nПользователь: {username or f'ID:{uid}'} ({uid})\nТовар: {item}\nКол-во: {qty}\nЦена: {price}₽/шт\nСумма: {total}₽\nДата: {date_str}\nСтатус: {status}"
-        # кнопки для изменения статуса (исключая текущий)
-        statuses = ["В обработке", "Отправлен", "Доставлен", "Отклонён"]
-        ikb = types.InlineKeyboardMarkup(row_width=2)
-        for st in statuses:
-            if st != status:
-                ikb.add(types.InlineKeyboardButton(st, callback_data=f"change_status:{oid}:{st}"))
-        ikb.add(types.InlineKeyboardButton("Удалить заказ", callback_data=f"delete_order:{oid}"))
-        ikb.add(types.InlineKeyboardButton("🔙 Назад к списку", callback_data="admin_orders"))
-        bot.send_message(OWNER_ID, text, reply_markup=ikb)
+        
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders WHERE id = :oid"
+                ), {"oid": oid})
+                row = result.fetchone()
+            
+            if not row:
+                bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
+                return
+            
+            _, uid, username, item, qty, price, total, date_str, status = row
+            text = f"Заказ #{oid}\nПользователь: {username or f'ID:{uid}'} ({uid})\nТовар: {item}\nКол-во: {qty}\nЦена: {price}₽/шт\nСумма: {total}₽\nДата: {date_str}\nСтатус: {status}"
+            
+            # кнопки для изменения статуса (исключая текущий)
+            statuses = ["В обработке", "Отправлен", "Доставлен", "Отклонён"]
+            ikb = types.InlineKeyboardMarkup(row_width=2)
+            for st in statuses:
+                if st != status:
+                    ikb.add(types.InlineKeyboardButton(st, callback_data=f"change_status:{oid}:{st}"))
+            ikb.add(types.InlineKeyboardButton("Удалить заказ", callback_data=f"delete_order:{oid}"))
+            ikb.add(types.InlineKeyboardButton("🔙 Назад к списку", callback_data="admin_orders"))
+            bot.send_message(OWNER_ID, text, reply_markup=ikb)
+        except Exception as e:
+            logger.error(f"Ошибка получения заказа: {e}")
+            bot.send_message(OWNER_ID, f"Ошибка при получении заказа #{oid}.")
         return
 
     # изменить статус заказа (админ)
@@ -1173,23 +1328,33 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный формат данных.")
             return
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT user_id FROM merch_orders WHERE id=?", (oid,))
-        row = cur.fetchone()
-        if not row:
-            conn.close()
-            bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
-            return
-        user_for_notify = row[0]
-        cur.execute("UPDATE merch_orders SET status=? WHERE id=?", (new_status, oid))
-        conn.commit()
-        conn.close()
-        bot.send_message(OWNER_ID, f"Статус заказа #{oid} изменён на: {new_status}")
+        
         try:
-            bot.send_message(user_for_notify, f"Обновление статуса вашего заказа #{oid}: {new_status}")
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT user_id FROM merch_orders WHERE id = :oid"
+                ), {"oid": oid})
+                row = result.fetchone()
+                
+                if not row:
+                    bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
+                    return
+                
+                user_for_notify = row[0]
+                
+                conn.execute(text(
+                    "UPDATE merch_orders SET status = :new_status WHERE id = :oid"
+                ), {"new_status": new_status, "oid": oid})
+                conn.commit()
+            
+            bot.send_message(OWNER_ID, f"Статус заказа #{oid} изменён на: {new_status}")
+            try:
+                bot.send_message(user_for_notify, f"Обновление статуса вашего заказа #{oid}: {new_status}")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {user_for_notify}: {e}")
         except Exception as e:
-            logger.error(f"Не удалось уведомить пользователя {user_for_notify}: {e}")
+            logger.error(f"Ошибка изменения статуса заказа: {e}")
+            bot.send_message(OWNER_ID, f"Ошибка при изменении статуса заказа #{oid}.")
         return
 
     # удалить заказ (админ)
@@ -1200,19 +1365,28 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный id.")
             return
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT user_id FROM merch_orders WHERE id=?", (oid,))
-        row = cur.fetchone()
-        cur.execute("DELETE FROM merch_orders WHERE id=?", (oid,))
-        conn.commit()
-        conn.close()
-        bot.send_message(OWNER_ID, f"Заказ #{oid} удалён.")
-        if row:
-            try:
-                bot.send_message(row[0], f"Ваш заказ #{oid} удалён администратором.")
-            except Exception:
-                pass
+        
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(
+                    "SELECT user_id FROM merch_orders WHERE id = :oid"
+                ), {"oid": oid})
+                row = result.fetchone()
+                
+                conn.execute(text(
+                    "DELETE FROM merch_orders WHERE id = :oid"
+                ), {"oid": oid})
+                conn.commit()
+            
+            bot.send_message(OWNER_ID, f"Заказ #{oid} удалён.")
+            if row:
+                try:
+                    bot.send_message(row[0], f"Ваш заказ #{oid} удалён администратором.")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Ошибка удаления заказа: {e}")
+            bot.send_message(OWNER_ID, f"Ошибка при удалении заказа #{oid}.")
         return
 
     # Обработка подтверждения/отклонения pending заказов (владелец)
@@ -1223,20 +1397,23 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный id pending.")
             return
-        pending = get_pending(pid)
-        if not pending:
-            bot.send_message(OWNER_ID, f"Ожидающий заказ #{pid} не найден.")
-            return
-        # переносим pending -> orders, очищаем корзину пользователя
-        ok = move_pending_to_orders(pid)
-        if ok:
-            _, uid, username, items_json, total, date_str = pending
-            bot.send_message(OWNER_ID, f"Заказ #{pid} подтверждён и перенесён в заказы.")
-            try:
-                bot.send_message(uid, f"Ваш заказ #{pid} подтверждён владельцем. Статус: В обработке. Общая сумма: {total}₽")
-            except Exception as e:
-                logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
-        else:
+        
+        try:
+            # переносим pending -> orders, очищаем корзину пользователя
+            ok = move_pending_to_orders(pid)
+            if ok:
+                pending = get_pending(pid)
+                if pending:
+                    _, uid, username, items_json, total, date_str = pending
+                    bot.send_message(OWNER_ID, f"Заказ #{pid} подтверждён и перенесён в заказы.")
+                    try:
+                        bot.send_message(uid, f"Ваш заказ #{pid} подтверждён владельцем. Статус: В обработке. Общая сумма: {total}₽")
+                    except Exception as e:
+                        logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
+            else:
+                bot.send_message(OWNER_ID, "Ошибка при подтверждении заказа.")
+        except Exception as e:
+            logger.error(f"Ошибка подтверждения pending: {e}")
             bot.send_message(OWNER_ID, "Ошибка при подтверждении заказа.")
         return
 
@@ -1247,22 +1424,27 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный id pending.")
             return
-        pending = get_pending(pid)
-        if not pending:
-            bot.send_message(OWNER_ID, f"Ожидающий заказ #{pid} не найден.")
-            return
-        _, uid, username, items_json, total, date_str = pending
-        # удаляем pending и очищаем корзину пользователя (по твоему запросу)
-        delete_pending(pid)
+        
         try:
+            pending = get_pending(pid)
+            if not pending:
+                bot.send_message(OWNER_ID, f"Ожидающий заказ #{pid} не найден.")
+                return
+            
+            _, uid, username, items_json, total, date_str = pending
+            
+            # удаляем pending и очищаем корзину пользователя
+            delete_pending(pid)
             clear_cart(uid)
+            
+            bot.send_message(OWNER_ID, f"Заказ #{pid} отклонён и удалён.")
+            try:
+                bot.send_message(uid, f"Ваш заказ #{pid} отклонён владельцем. Корзина очищена. При желании оформите заказ снова.")
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
         except Exception as e:
-            logger.error(f"Ошибка при очистке корзины пользователя после отклонения: {e}")
-        bot.send_message(OWNER_ID, f"Заказ #{pid} отклонён и удалён.")
-        try:
-            bot.send_message(uid, f"Ваш заказ #{pid} отклонён владельцем. Корзина очищена. При желании оформите заказ снова.")
-        except Exception as e:
-            logger.error(f"Не удалось уведомить пользователя {uid}: {e}")
+            logger.error(f"Ошибка отклонения pending: {e}")
+            bot.send_message(OWNER_ID, "Ошибка при отклонении заказа.")
         return
 
     # fallback: неопознанный callback — просто ack
@@ -1274,22 +1456,28 @@ def callback_query_handler(call: types.CallbackQuery):
 # --- Рассылка (админ) ---
 def admin_broadcast_send(message):
     text = message.text
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM subscriptions")
-    rows = cur.fetchall()
-    conn.close()
-    if not rows:
-        bot.send_message(OWNER_ID, "Нет подписчиков для рассылки.")
-        return
-    sent = 0
-    for (user_id,) in rows:
-        try:
-            bot.send_message(user_id, text)
-            sent += 1
-        except Exception as e:
-            logger.error(f"Ошибка при отправке рассылки {user_id}: {e}")
-    bot.send_message(OWNER_ID, f"Рассылка отправлена. Успешных отправок: {sent}")
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT user_id FROM subscriptions"
+            ))
+            rows = result.fetchall()
+        
+        if not rows:
+            bot.send_message(OWNER_ID, "Нет подписчиков для рассылки.")
+            return
+        
+        sent = 0
+        for (user_id,) in rows:
+            try:
+                bot.send_message(user_id, text)
+                sent += 1
+            except Exception as e:
+                logger.error(f"Ошибка при отправке рассылки {user_id}: {e}")
+        bot.send_message(OWNER_ID, f"Рассылка отправлена. Успешных отправок: {sent}")
+    except Exception as e:
+        logger.error(f"Ошибка рассылки: {e}")
+        bot.send_message(OWNER_ID, "Ошибка при выполнении рассылки.")
 
 # --- Остальной webhook и запуск Flask ---
 @app.route("/")
