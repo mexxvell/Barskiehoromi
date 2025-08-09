@@ -11,6 +11,21 @@ import telebot
 from telebot import types
 from datetime import datetime, date
 
+# --- Определение пути к базе данных ---
+# Render.com предоставляет специальную директорию для хранения данных
+if os.getenv('RENDER_SERVICE_ID'):
+    # Работаем в Render.com
+    DB_PATH = '/var/render/data/bot_data.db'
+    # Создаем директорию, если она не существует
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    logger = logging.getLogger(__name__)
+    logger.info(f"Используется база данных в Render.com: {DB_PATH}")
+else:
+    # Работаем локально
+    DB_PATH = 'bot_data.db'
+    logger = logging.getLogger(__name__)
+    logger.info(f"Используется локальная база данных: {DB_PATH}")
+
 # --- Настройка логирования ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -42,7 +57,7 @@ except ImportError:
 
 # --- Инициализация БД ---
 def init_db():
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     # корзина (с ценой)
     cur.execute('''
@@ -284,7 +299,7 @@ def send_rate_limited_message(chat_id):
 # --- Уникальные пользователи лог ---
 def log_user(user_id):
     today = str(date.today())
-    conn = sqlite3.connect("bot_data.db")
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT 1 FROM user_log WHERE user_id=? AND date=?", (user_id, today))
     if not cur.fetchone():
@@ -298,7 +313,7 @@ def send_daily_stats():
         now = datetime.now()
         if now.hour == 23 and now.minute == 59:
             today = str(date.today())
-            conn = sqlite3.connect('bot_data.db')
+            conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
             cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date=?", (today,))
             count = cur.fetchone()[0]
@@ -326,7 +341,7 @@ threading.Thread(target=self_ping, daemon=True).start()
 
 # --- Вспомогательные DB-функции ---
 def add_to_cart_db(user_id, item, quantity, price):
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("INSERT INTO merch_cart (user_id, item, quantity, price) VALUES (?, ?, ?, ?)",
                 (user_id, item, quantity, price))
@@ -334,7 +349,7 @@ def add_to_cart_db(user_id, item, quantity, price):
     conn.close()
 
 def get_cart_items(user_id):
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT item, quantity, price FROM merch_cart WHERE user_id=?", (user_id,))
     rows = cur.fetchall()
@@ -342,7 +357,7 @@ def get_cart_items(user_id):
     return rows
 
 def clear_cart(user_id):
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("DELETE FROM merch_cart WHERE user_id=?", (user_id,))
     conn.commit()
@@ -364,7 +379,7 @@ def create_pending_from_cart(user_id, username):
         total_sum += total
         items_list.append({"item": item, "quantity": qty, "price": price, "total": total})
     items_json = json.dumps(items_list, ensure_ascii=False)
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("INSERT INTO merch_pending (user_id, username, items_json, total, date) VALUES (?, ?, ?, ?, ?)",
                 (user_id, username, items_json, total_sum, today))
@@ -374,7 +389,7 @@ def create_pending_from_cart(user_id, username):
     return pid, items_list, total_sum
 
 def get_pending(pending_id):
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id, user_id, username, items_json, total, date FROM merch_pending WHERE id=?", (pending_id,))
     row = cur.fetchone()
@@ -382,7 +397,7 @@ def get_pending(pending_id):
     return row
 
 def delete_pending(pending_id):
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("DELETE FROM merch_pending WHERE id=?", (pending_id,))
     conn.commit()
@@ -400,7 +415,7 @@ def move_pending_to_orders(pending_id):
         items = json.loads(items_json)
     except:
         items = []
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     for it in items:
         item = it.get("item")
@@ -438,7 +453,7 @@ def start(message):
     username = f"@{message.from_user.username}" if message.from_user.username else None
     
     # Проверяем, новый ли пользователь
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT 1 FROM referrals WHERE user_id=?", (message.chat.id,))
     is_new_user = not bool(cur.fetchone())
@@ -537,7 +552,7 @@ def my_orders(message):
     if not allowed_action(message.chat.id, "my_orders"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
     rows = cur.fetchall()
@@ -561,7 +576,7 @@ def purchase_history(message):
     if not allowed_action(message.chat.id, "purchase_history"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     # Получаем все заказы пользователя
     cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
@@ -592,7 +607,7 @@ def referral_link(message):
         send_rate_limited_message(message.chat.id)
         return
     
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT referral_code, referrals_count, bonus_points FROM referrals WHERE user_id=?", (message.chat.id,))
     referral_info = cur.fetchone()
@@ -730,7 +745,7 @@ def subscribe_events(message):
     if not allowed_action(message.chat.id, "subscribe_events"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
         # Получаем username пользователя
@@ -765,7 +780,7 @@ def unsubscribe_events(message):
     if not allowed_action(message.chat.id, "unsubscribe_events"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     try:
         # Получаем username пользователя
@@ -1021,7 +1036,7 @@ def my_orders(message):
     if not allowed_action(message.chat.id, "my_orders"):
         send_rate_limited_message(message.chat.id)
         return
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id=? ORDER BY id DESC", (message.chat.id,))
     rows = cur.fetchall()
@@ -1064,7 +1079,7 @@ def callback_query_handler(call: types.CallbackQuery):
 
     if data == "admin_stats" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('bot_data.db')
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         today = str(date.today())
         cur.execute("SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date=?", (today,))
@@ -1077,7 +1092,7 @@ def callback_query_handler(call: types.CallbackQuery):
 
     if data == "admin_subscribers" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('bot_data.db')
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT user_id, username FROM subscriptions")
         rows = cur.fetchall()
@@ -1099,7 +1114,7 @@ def callback_query_handler(call: types.CallbackQuery):
     # показать список заказов (админ)
     if data == "admin_orders" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('bot_data.db')
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT id, user_id, username, item, quantity, total, date, status FROM merch_orders ORDER BY id DESC LIMIT 50")
         rows = cur.fetchall()
@@ -1124,7 +1139,7 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный id заказа.")
             return
-        conn = sqlite3.connect('bot_data.db')
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders WHERE id=?", (oid,))
         row = cur.fetchone()
@@ -1158,7 +1173,7 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный формат данных.")
             return
-        conn = sqlite3.connect('bot_data.db')
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT user_id FROM merch_orders WHERE id=?", (oid,))
         row = cur.fetchone()
@@ -1185,7 +1200,7 @@ def callback_query_handler(call: types.CallbackQuery):
         except:
             bot.send_message(OWNER_ID, "Неправильный id.")
             return
-        conn = sqlite3.connect('bot_data.db')
+        conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
         cur.execute("SELECT user_id FROM merch_orders WHERE id=?", (oid,))
         row = cur.fetchone()
@@ -1259,7 +1274,7 @@ def callback_query_handler(call: types.CallbackQuery):
 # --- Рассылка (админ) ---
 def admin_broadcast_send(message):
     text = message.text
-    conn = sqlite3.connect('bot_data.db')
+    conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT user_id FROM subscriptions")
     rows = cur.fetchall()
