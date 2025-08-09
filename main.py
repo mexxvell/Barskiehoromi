@@ -90,7 +90,18 @@ def init_db():
     # подписчики на события
     cur.execute('''
         CREATE TABLE IF NOT EXISTS subscriptions (
-            user_id INTEGER PRIMARY KEY
+            user_id INTEGER PRIMARY KEY,
+            date_subscribed TEXT,
+            username TEXT
+        )
+    ''')
+    # таблица отписчиков
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS unsubscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            date_unsubscribed TEXT,
+            username TEXT
         )
     ''')
     # таблица рефералов
@@ -163,7 +174,7 @@ def log_order_to_google_sheets(order_id, user_id, username, item, quantity, pric
         logger.error(f"Ошибка записи заказа в Google Sheets: {e}")
         return False
 
-def log_subscription_to_google_sheets(user_id, date_subscribed):
+def log_subscription_to_google_sheets(user_id, date_subscribed, username):
     """Записывает информацию о подписке в Google Таблицу"""
     if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
         return False
@@ -172,6 +183,7 @@ def log_subscription_to_google_sheets(user_id, date_subscribed):
         sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Подписчики")
         sheet.append_row([
             user_id,
+            username or f"ID:{user_id}",
             date_subscribed,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Время записи
         ])
@@ -180,7 +192,25 @@ def log_subscription_to_google_sheets(user_id, date_subscribed):
         logger.error(f"Ошибка записи подписки в Google Sheets: {e}")
         return False
 
-def log_user_to_google_sheets(user_id, date_registered):
+def log_unsubscription_to_google_sheets(user_id, date_unsubscribed, username):
+    """Записывает информацию об отписке в Google Таблицу"""
+    if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
+        return False
+    
+    try:
+        sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Отписчики")
+        sheet.append_row([
+            user_id,
+            username or f"ID:{user_id}",
+            date_unsubscribed,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Время записи
+        ])
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка записи отписки в Google Sheets: {e}")
+        return False
+
+def log_user_to_google_sheets(user_id, date_registered, username):
     """Записывает информацию о новом пользователе в Google Таблицу"""
     if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
         return False
@@ -189,6 +219,7 @@ def log_user_to_google_sheets(user_id, date_registered):
         sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Пользователи")
         sheet.append_row([
             user_id,
+            username or f"ID:{user_id}",
             date_registered,
             datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Время записи
         ])
@@ -197,7 +228,7 @@ def log_user_to_google_sheets(user_id, date_registered):
         logger.error(f"Ошибка записи пользователя в Google Sheets: {e}")
         return False
 
-def log_referral_to_google_sheets(user_id, referrer_id, referral_code, date_registered):
+def log_referral_to_google_sheets(user_id, referrer_id, referral_code, date_registered, username):
     """Записывает информацию о реферале в Google Таблицу"""
     if not GOOGLE_SHEETS_ENABLED or not gs_client or not SPREADSHEET_ID:
         return False
@@ -206,6 +237,7 @@ def log_referral_to_google_sheets(user_id, referrer_id, referral_code, date_regi
         sheet = gs_client.open_by_key(SPREADSHEET_ID).worksheet("Рефералы")
         sheet.append_row([
             user_id,
+            username or f"ID:{user_id}",
             referrer_id or "Нет",
             referral_code,
             date_registered,
@@ -402,6 +434,9 @@ def start(message):
         return
     log_user(message.chat.id)
     
+    # Получаем username пользователя
+    username = f"@{message.from_user.username}" if message.from_user.username else None
+    
     # Проверяем, новый ли пользователь
     conn = sqlite3.connect('bot_data.db')
     cur = conn.cursor()
@@ -453,7 +488,7 @@ def start(message):
         
         # Логируем пользователя в Google Sheets
         if GOOGLE_SHEETS_ENABLED:
-            log_user_to_google_sheets(message.chat.id, date_registered)
+            log_user_to_google_sheets(message.chat.id, date_registered, username)
         
         # Если есть реферер, логируем реферальную связь
         if referrer_id:
@@ -461,14 +496,14 @@ def start(message):
                 message.chat.id, 
                 referrer_id, 
                 referral_code, 
-                date_registered
+                date_registered,
+                username
             )
     
     conn.close()
     
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.add(
-        types.KeyboardButton("👤 Личный кабинет"),
         types.KeyboardButton("👥 Команда"),
         types.KeyboardButton("🌍 Путешествия"),
         types.KeyboardButton("🧘 Кундалини-йога"),
@@ -477,7 +512,6 @@ def start(message):
         types.KeyboardButton("🎁 Доп. услуги")
     )
     bot.send_message(message.chat.id, "👋 Добро пожаловать!\n"
-                "👤 Личный кабинет — ваши заказы и реферальная программа\n"
                 "👥 Команда — познакомьтесь с нами\n"
                 "🌍 Путешествия — авторские туры и ретриты\n"
                 "🧘 Кундалини-йога — практика и трансформация\n"
@@ -492,7 +526,9 @@ def personal_cabinet(message):
         send_rate_limited_message(message.chat.id)
         return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("📦 Мои заказы", "📜 История покупок", "🔗 Реферальная ссылка", "🔙 Назад в меню")
+    kb.add("📦 Мои заказы", "📜 История покупок", "🔗 Реферальная ссылка")
+    kb.add("📢 Подписаться на события", "🚫 Отписаться от событий")
+    kb.add("🔙 Назад в меню")
     bot.send_message(message.chat.id, "👤 Ваш личный кабинет", reply_markup=kb)
 
 # Обновляем обработчик "Мои заказы"
@@ -679,14 +715,14 @@ def media_menu(message):
     kb.add("▶️ YouTube", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🎥 Медиа: наши видео на YouTube.", reply_markup=kb)
 
-# --- Доп. услуги: подписка/отписка ---
+# --- Доп. услуги: теперь здесь личный кабинет ---
 @bot.message_handler(func=lambda m: m.text == "🎁 Доп. услуги")
 def services_menu(message):
     if not allowed_action(message.chat.id, "services_menu"):
         send_rate_limited_message(message.chat.id)
         return
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    kb.add("📢 Подписаться на события", "🚫 Отписаться от событий", "🔙 Назад к меню")
+    kb.add("👤 Личный кабинет", "🔙 Назад к меню")
     bot.send_message(message.chat.id, "🔧 Дополнительные услуги: детали по запросу.", reply_markup=kb)
 
 @bot.message_handler(func=lambda m: m.text == "📢 Подписаться на события")
@@ -697,13 +733,27 @@ def subscribe_events(message):
     conn = sqlite3.connect('bot_data.db')
     cur = conn.cursor()
     try:
-        cur.execute("INSERT OR IGNORE INTO subscriptions (user_id) VALUES (?)", (message.chat.id,))
+        # Получаем username пользователя
+        username = f"@{message.from_user.username}" if message.from_user.username else None
+        date_subscribed = str(date.today())
+        
+        # Проверяем, не отписывался ли пользователь ранее
+        cur.execute("SELECT 1 FROM unsubscriptions WHERE user_id=?", (message.chat.id,))
+        was_unsubscribed = bool(cur.fetchone())
+        
+        # Если ранее отписывался, удаляем из таблицы отписчиков
+        if was_unsubscribed:
+            cur.execute("DELETE FROM unsubscriptions WHERE user_id=?", (message.chat.id,))
+        
+        # Добавляем в подписчики
+        cur.execute("INSERT OR REPLACE INTO subscriptions (user_id, date_subscribed, username) VALUES (?, ?, ?)", 
+                   (message.chat.id, date_subscribed, username))
         conn.commit()
         bot.send_message(message.chat.id, "Вы успешно подписались на события. Будем отправлять уведомления о новых ретритах и мероприятиях.")
         
         # Логируем подписку в Google Sheets
         if GOOGLE_SHEETS_ENABLED:
-            log_subscription_to_google_sheets(message.chat.id, str(date.today()))
+            log_subscription_to_google_sheets(message.chat.id, date_subscribed, username)
     except Exception as e:
         logger.error(f"Ошибка подписки: {e}")
         bot.send_message(message.chat.id, "Ошибка при подписке. Попробуйте позже.")
@@ -718,9 +768,22 @@ def unsubscribe_events(message):
     conn = sqlite3.connect('bot_data.db')
     cur = conn.cursor()
     try:
+        # Получаем username пользователя
+        username = f"@{message.from_user.username}" if message.from_user.username else None
+        date_unsubscribed = str(date.today())
+        
+        # Удаляем из подписчиков
         cur.execute("DELETE FROM subscriptions WHERE user_id=?", (message.chat.id,))
+        
+        # Добавляем в отписчики
+        cur.execute("INSERT INTO unsubscriptions (user_id, date_unsubscribed, username) VALUES (?, ?, ?)", 
+                   (message.chat.id, date_unsubscribed, username))
         conn.commit()
         bot.send_message(message.chat.id, "Вы отписаны от рассылки событий.")
+        
+        # Логируем отписку в Google Sheets
+        if GOOGLE_SHEETS_ENABLED:
+            log_unsubscription_to_google_sheets(message.chat.id, date_unsubscribed, username)
     except Exception as e:
         logger.error(f"Ошибка отписки: {e}")
         bot.send_message(message.chat.id, "Ошибка при отписке. Попробуйте позже.")
@@ -1016,13 +1079,13 @@ def callback_query_handler(call: types.CallbackQuery):
         bot.answer_callback_query(call.id)
         conn = sqlite3.connect('bot_data.db')
         cur = conn.cursor()
-        cur.execute("SELECT user_id FROM subscriptions")
+        cur.execute("SELECT user_id, username FROM subscriptions")
         rows = cur.fetchall()
         conn.close()
         if not rows:
             bot.send_message(OWNER_ID, "Нет подписчиков.")
         else:
-            lst = ", ".join([str(r[0]) for r in rows])
+            lst = ", ".join([f"{username or f'ID:{user_id}'}" for user_id, username in rows])
             bot.send_message(OWNER_ID, f"Подписчики: {lst}")
         return
 
@@ -1047,7 +1110,7 @@ def callback_query_handler(call: types.CallbackQuery):
         # для компактности покажем кнопки-переключатели на отдельные заказы
         ikb = types.InlineKeyboardMarkup(row_width=1)
         for oid, uid, username, item, qty, total, date_str, status in rows:
-            label = f"#{oid} | {username} | {item}×{qty} | {total}₽ | {status}"
+            label = f"#{oid} | {username or f'ID:{uid}'} | {item}×{qty} | {total}₽ | {status}"
             ikb.add(types.InlineKeyboardButton(label, callback_data=f"open_order:{oid}"))
         ikb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back"))
         bot.send_message(OWNER_ID, "Последние заказы (нажмите для управления):", reply_markup=ikb)
@@ -1070,7 +1133,7 @@ def callback_query_handler(call: types.CallbackQuery):
             bot.send_message(OWNER_ID, f"Заказ #{oid} не найден.")
             return
         _, uid, username, item, qty, price, total, date_str, status = row
-        text = f"Заказ #{oid}\nПользователь: {username} ({uid})\nТовар: {item}\nКол-во: {qty}\nЦена: {price}₽/шт\nСумма: {total}₽\nДата: {date_str}\nСтатус: {status}"
+        text = f"Заказ #{oid}\nПользователь: {username or f'ID:{uid}'} ({uid})\nТовар: {item}\nКол-во: {qty}\nЦена: {price}₽/шт\nСумма: {total}₽\nДата: {date_str}\nСтатус: {status}"
         # кнопки для изменения статуса (исключая текущий)
         statuses = ["В обработке", "Отправлен", "Доставлен", "Отклонён"]
         ikb = types.InlineKeyboardMarkup(row_width=2)
