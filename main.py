@@ -1219,6 +1219,41 @@ def callback_query_handler(call: types.CallbackQuery):
             logger.error(f"Ошибка получения подписчиков: {e}")
             bot.send_message(OWNER_ID, "Ошибка при получении списка подписчиков.")
         return
+    # Подтверждение/отмена рассылки (владелец)
+    if data and data.startswith("confirm_broadcast:") and user_id == OWNER_ID:
+        # Извлекаем ID и подтягиваем текст из БД
+        try:
+            b_id = int(data.split(":", 1)[1])
+        except Exception:
+            bot.answer_callback_query(call.id, "Некорректные данные.")
+            return
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(sql_text("SELECT text FROM broadcasts WHERE id = :id"), {"id": b_id})
+                row = result.fetchone()
+        except Exception as e:
+            logger.error(f"Ошибка получения текста рассылки: {e}")
+            row = None
+        if not row:
+            bot.answer_callback_query(call.id, "Черновик рассылки не найден.")
+            return
+        broadcast_text = row[0]
+        bot.answer_callback_query(call.id, "Начинаем рассылку...")
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+        bot.send_message(OWNER_ID, "📤 Рассылка началась...")
+        confirm_broadcast(broadcast_text)
+        return
+    if data == "cancel_broadcast" and user_id == OWNER_ID:
+        bot.answer_callback_query(call.id, "Рассылка отменена")
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+        bot.send_message(OWNER_ID, "Рассылка отменена.")
+        return
     # ИСПРАВЛЕНО: Добавлено подтверждение рассылки
     if data == "admin_broadcast" and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
@@ -1492,52 +1527,6 @@ def confirm_broadcast(broadcast_text):
     except Exception as e:
         logger.error(f"Ошибка рассылки: {e}")
         bot.send_message(OWNER_ID, "Ошибка при выполнении рассылки.")
-# Обработчик для подтверждения рассылки
-@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_broadcast:"))
-def handle_confirm_broadcast(call):
-    if call.from_user.id != OWNER_ID:
-        bot.answer_callback_query(call.id, "Вы не являетесь владельцем бота!")
-        return
-    # Извлекаем ID рассылки из callback_data и подтягиваем текст из БД
-    try:
-        b_id = int(call.data.split(":", 1)[1])
-    except Exception:
-        bot.answer_callback_query(call.id, "Некорректные данные.")
-        return
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(sql_text("SELECT text FROM broadcasts WHERE id = :id"), {"id": b_id})
-            row = result.fetchone()
-    except Exception as e:
-        logger.error(f"Ошибка получения текста рассылки: {e}")
-        row = None
-    if not row:
-        bot.answer_callback_query(call.id, "Черновик рассылки не найден.")
-        return
-    broadcast_text = row[0]
-    # Отправляем сообщение о начале рассылки
-    bot.answer_callback_query(call.id, "Начинаем рассылку...")
-    # Удаляем сообщение с подтверждением
-    try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-    except:
-        pass
-    # Отправляем сообщение о процессе
-    bot.send_message(OWNER_ID, "📤 Рассылка началась...")
-    # Запускаем рассылку
-    confirm_broadcast(broadcast_text)
-# Обработчик для отмены рассылки
-@bot.callback_query_handler(func=lambda call: call.data == "cancel_broadcast")
-def handle_cancel_broadcast(call):
-    if call.from_user.id != OWNER_ID:
-        bot.answer_callback_query(call.id, "Вы не являетесь владельцем бота!")
-        return
-    bot.answer_callback_query(call.id, "Рассылка отменена")
-    try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-    except:
-        pass
-    bot.send_message(OWNER_ID, "Рассылка отменена.")
 # --- Остальной webhook и запуск Flask ---
 @app.route("/")
 def index():
