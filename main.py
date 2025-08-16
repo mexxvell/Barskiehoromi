@@ -13,7 +13,8 @@ import sqlalchemy
 from sqlalchemy import create_engine
 # --- ИСПРАВЛЕНО: переименовали импорт text в sql_text для избежания конфликта имен ---
 from sqlalchemy import text as sql_text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError
+from apscheduler.schedulers.background import BackgroundScheduler
 # --- Настройка логирования ---
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -29,8 +30,16 @@ OWNER_ID = int(os.getenv("OWNER_TELEGRAM_ID", "0")) or None
 if not OWNER_ID:
     logger.error("Переменная OWNER_TELEGRAM_ID не установлена или некорректна")
     raise RuntimeError("OWNER_TELEGRAM_ID is required")
-RENDER_URL = os.getenv("RENDER_URL", "https://your-app.onrender.com  ")
+def _normalize_base_url(url: str) -> str:
+    if not url:
+        return ""
+    return url.strip().rstrip('/')
+
+RENDER_URL = _normalize_base_url(os.getenv("RENDER_URL", "https://your-app.onrender.com"))
+if not RENDER_URL or "your-app.onrender.com" in RENDER_URL:
+    logger.warning("RENDER_URL не установлен или является плейсхолдером — проверьте ENV")
 WEBHOOK_URL = f"{RENDER_URL}/{TOKEN}"
+WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET")
 # --- Настройка PostgreSQL ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL:
@@ -51,10 +60,10 @@ else:
 # --- Импорт для Google Sheets ---
 try:
     import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
     GOOGLE_SHEETS_ENABLED = True
     logger.info("gspread установлен. Интеграция с Google Sheets доступна.")
 except ImportError:
+    gspread = None  # type: ignore
     GOOGLE_SHEETS_ENABLED = False
     logger.warning("gspread не установлен. Интеграция с Google Sheets отключена.")
 # --- Инициализация БД ---
@@ -132,6 +141,28 @@ def init_db():
                     date_registered TEXT
                 )
             '''))
+            # Таблица для rate limiting на PostgreSQL
+            conn.execute(sql_text('''
+                CREATE TABLE IF NOT EXISTS rate_limits (
+                    user_id BIGINT NOT NULL,
+                    action TEXT NOT NULL,
+                    last_ts DOUBLE PRECISION NOT NULL,
+                    PRIMARY KEY (user_id, action)
+                )
+            '''))
+            # Индексы для ускорения запросов
+            conn.execute(sql_text("CREATE INDEX IF NOT EXISTS user_log_date_idx ON user_log (date)"))
+            conn.execute(sql_text("CREATE INDEX IF NOT EXISTS merch_orders_user_id_idx ON merch_orders (user_id)"))
+            conn.execute(sql_text("CREATE INDEX IF NOT EXISTS merch_orders_status_idx ON merch_orders (status)"))
+            conn.execute(sql_text("CREATE INDEX IF NOT EXISTS unsubscriptions_date_idx ON unsubscriptions (date_unsubscribed)"))
+            # таблица для черновиков/текстов рассылки (для безопасного подтверждения)
+            conn.execute(sql_text('''
+                CREATE TABLE IF NOT EXISTS broadcasts (
+                    id SERIAL PRIMARY KEY,
+                    text TEXT NOT NULL,
+                    created_at TEXT
+                )
+            '''))
             conn.commit()
     except Exception as e:
         logger.error(f"Ошибка инициализации базы данных: {e}")
@@ -145,15 +176,8 @@ if GOOGLE_SHEETS_ENABLED:
             if not credentials_path:
                 logger.error("GOOGLE_SHEETS_CREDENTIALS_PATH не установлен")
                 return None
-            scope = [
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive'
-            ]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(
-                credentials_path, 
-                scope
-            )
-            client = gspread.authorize(creds)
+            # gspread удобный хелпер для сервисного аккаунта
+            client = gspread.service_account(filename=credentials_path)
             return client
         except Exception as e:
             logger.error(f"Ошибка инициализации Google Sheets: {e}")
@@ -255,25 +279,49 @@ def log_referral_to_google_sheets(user_id, referrer_id, referral_code, date_regi
 app = Flask(__name__)
 bot = telebot.TeleBot(TOKEN)
 bot.remove_webhook()
-bot.set_webhook(url=WEBHOOK_URL)
+# Устанавливаем вебхук с secret_token, если библиотека поддерживает и секрет задан
+try:
+    if WEBHOOK_SECRET:
+        bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
+    else:
+        bot.set_webhook(url=WEBHOOK_URL)
+except TypeError:
+    # Для старых версий pyTelegramBotAPI без secret_token параметра
+    bot.set_webhook(url=WEBHOOK_URL)
 # --- Словарь товаров мерча (название: (цена, файл фото или список фото)) ---
 MERCH_ITEMS = {
     "👜 Сумка Шоппер":   (500, ["shopper.jpg", "shopper1.jpg"]),
     "☕ Кружки":    (300, "mug.jpg"),
     "👕 Футболки":  (800, "tshirt.jpg")
 }
-# --- Rate limiting (защита от спама) ---
-# структура: last_action_time["{user_id}:{action}"] = timestamp
-last_action_time = {}
+# --- Rate limiting на PostgreSQL ---
 DEFAULT_LIMIT_SECONDS = 2  # минимальное время между действиями
-def allowed_action(user_id: int, action: str, limit_seconds: int = DEFAULT_LIMIT_SECONDS):
-    key = f"{user_id}:{action}"
+
+def allowed_action(user_id: int, action: str, limit_seconds: int = DEFAULT_LIMIT_SECONDS) -> bool:
     now = time.time()
-    last = last_action_time.get(key, 0)
-    if now - last < limit_seconds:
-        return False
-    last_action_time[key] = now
-    return True
+    try:
+        with engine.connect() as conn:
+            # Проверяем последнее время; если прошло недостаточно — отклоняем, иначе обновляем.
+            res = conn.execute(sql_text(
+                "SELECT last_ts FROM rate_limits WHERE user_id = :uid AND action = :act"
+            ), {"uid": user_id, "act": action}).fetchone()
+            if res:
+                last_ts = float(res[0])
+                if now - last_ts < limit_seconds:
+                    return False
+                conn.execute(sql_text(
+                    "UPDATE rate_limits SET last_ts = :now WHERE user_id = :uid AND action = :act"
+                ), {"now": now, "uid": user_id, "act": action})
+            else:
+                conn.execute(sql_text(
+                    "INSERT INTO rate_limits (user_id, action, last_ts) VALUES (:uid, :act, :now)"
+                ), {"uid": user_id, "act": action, "now": now})
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.warning(f"Rate limit fallback (DB недоступна): {e}")
+        # в случае проблем с БД — не блокируем пользователя
+        return True
 def send_rate_limited_message(chat_id):
     try:
         bot.send_message(chat_id, "⏳ Подожди немного перед следующим действием (защита от спама).")
@@ -295,26 +343,36 @@ def log_user(user_id):
     except Exception as e:
         logger.error(f"Ошибка записи в БД: {e}")
 # --- Рассылка статистики владельцу (ежедневно в 23:59) ---
-def send_daily_stats():
-    while True:
-        now = datetime.now()
-        if now.hour == 23 and now.minute == 59:
-            today = str(date.today())
+def send_daily_stats_job():
+    """Ежедневная статистика с защитой через advisory lock (чтобы не было дублей)."""
+    today = str(date.today())
+    lock_key = 987654321  # произвольный ключ для блокировки
+    try:
+        with engine.connect() as conn:
+            got = conn.execute(sql_text("SELECT pg_try_advisory_lock(:k)"), {"k": lock_key}).scalar()
+            if not got:
+                return
             try:
-                with engine.connect() as conn:
-                    result = conn.execute(sql_text(
-                        "SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date = :today"
-                    ), {"today": today})
-                    count = result.fetchone()[0]
+                result = conn.execute(sql_text(
+                    "SELECT COUNT(DISTINCT user_id) FROM user_log WHERE date = :today"
+                ), {"today": today})
+                count = result.fetchone()[0]
+            finally:
                 try:
-                    bot.send_message(OWNER_ID, f"📊 Уникальных пользователей за {today}: {count}")
-                except Exception as e:
-                    logger.error(f"Ошибка при отправке статистики владельцу: {e}")
-            except Exception as e:
-                logger.error(f"Ошибка получения статистики: {e}")
-            time.sleep(60)  # ждать минуту, чтобы не продублировать
-        time.sleep(10)
-threading.Thread(target=send_daily_stats, daemon=True).start()
+                    conn.execute(sql_text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+                except Exception:
+                    pass
+        try:
+            bot.send_message(OWNER_ID, f"📊 Уникальных пользователей за {today}: {count}")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке статистики владельцу: {e}")
+    except Exception as e:
+        logger.error(f"Ошибка ежедневной статистики: {e}")
+
+# Запускаем планировщик для ежедневной статистики (23:59), автопинг остаётся через поток
+scheduler = BackgroundScheduler()
+scheduler.add_job(send_daily_stats_job, 'cron', hour=23, minute=59, id='daily_stats')
+scheduler.start()
 # --- Автопинг ---
 def self_ping():
     while True:
@@ -432,8 +490,12 @@ def move_pending_to_orders(pending_id):
                 qty = int(it.get("quantity", 0))
                 price = int(it.get("price", 0))
                 total_item = int(it.get("total", qty * price))
-                conn.execute(sql_text(
-                    "INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status) VALUES (:user_id, :username, :item, :quantity, :price, :total, :date, :status)"
+                result = conn.execute(sql_text(
+                    """
+                    INSERT INTO merch_orders (user_id, username, item, quantity, price, total, date, status)
+                    VALUES (:user_id, :username, :item, :quantity, :price, :total, :date, :status)
+                    RETURNING id
+                    """
                 ), {
                     "user_id": user_id,
                     "username": username,
@@ -444,9 +506,9 @@ def move_pending_to_orders(pending_id):
                     "date": date_str,
                     "status": "В обработке"
                 })
+                order_id = result.fetchone()[0]
                 # Логируем заказ в Google Sheets
                 if GOOGLE_SHEETS_ENABLED:
-                    order_id = conn.execute(sql_text("SELECT LASTVAL()")).fetchone()[0]
                     log_order_to_google_sheets(
                         order_id, user_id, username, item, qty, price, total_item, date_str, "В обработке"
                     )
@@ -495,43 +557,52 @@ def start(message):
             logger.error(f"Ошибка проверки реферального кода: {e}")
     # Если пользователь новый, добавляем его в БД
     if is_new_user:
-        # Генерируем уникальный реферальный код
+        # Генерируем уникальный реферальный код с ретраями на случай коллизии UNIQUE
         import random
         import string
-        referral_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-        # Дата регистрации
+        max_attempts = 5
         date_registered = str(date.today())
-        # Добавляем пользователя в таблицу referrals
-        try:
-            with engine.connect() as conn:
-                conn.execute(sql_text(
-                    "INSERT INTO referrals (user_id, referral_code, referred_by, date_registered) VALUES (:user_id, :referral_code, :referred_by, :date_registered)"
-                ), {
-                    "user_id": message.chat.id,
-                    "referral_code": referral_code,
-                    "referred_by": referrer_id,
-                    "date_registered": date_registered
-                })
-                conn.commit()
-                # Если есть реферер, увеличиваем его счетчик
-                if referrer_id:
+        inserted = False
+        for _ in range(max_attempts):
+            referral_code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            try:
+                with engine.connect() as conn:
+                    conn.execute(sql_text(
+                        "INSERT INTO referrals (user_id, referral_code, referred_by, date_registered) VALUES (:user_id, :referral_code, :referred_by, :date_registered)"
+                    ), {
+                        "user_id": message.chat.id,
+                        "referral_code": referral_code,
+                        "referred_by": referrer_id,
+                        "date_registered": date_registered
+                    })
+                    conn.commit()
+                inserted = True
+                break
+            except IntegrityError:
+                # Конфликт кода — пробуем другой
+                continue
+            except Exception as e:
+                logger.error(f"Ошибка добавления пользователя в referrals: {e}")
+                break
+        # Если есть реферер, увеличиваем его счетчик
+        if inserted and referrer_id:
+            try:
+                with engine.connect() as conn:
                     conn.execute(sql_text(
                         "UPDATE referrals SET referrals_count = referrals_count + 1, bonus_points = bonus_points + 10 WHERE user_id = :referrer_id"
                     ), {"referrer_id": referrer_id})
                     conn.commit()
-                    # Уведомляем реферера
-                    try:
-                        with engine.connect() as conn2:
-                            result = conn2.execute(sql_text(
-                                "SELECT referrals_count FROM referrals WHERE user_id = :referrer_id"
-                            ), {"referrer_id": referrer_id})
-                            referrals_count = result.fetchone()[0]
-                        bot.send_message(referrer_id, f"🎉 Пользователь перешел по вашей реферальной ссылке! "
-                                                   f"Вы получили 10 бонусных баллов. Всего приглашено: {referrals_count}")
-                    except Exception as e:
-                        logger.error(f"Не удалось уведомить реферера {referrer_id}: {e}")
-        except Exception as e:
-            logger.error(f"Ошибка добавления пользователя в referrals: {e}")
+                try:
+                    with engine.connect() as conn2:
+                        result = conn2.execute(sql_text(
+                            "SELECT referrals_count FROM referrals WHERE user_id = :referrer_id"
+                        ), {"referrer_id": referrer_id})
+                        referrals_count = result.fetchone()[0]
+                    bot.send_message(referrer_id, f"🎉 Пользователь перешел по вашей реферальной ссылке! Вы получили 10 бонусных баллов. Всего приглашено: {referrals_count}")
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить реферера {referrer_id}: {e}")
+            except Exception as e:
+                logger.error(f"Ошибка обновления счетчика реферала: {e}")
         # Логируем пользователя в Google Sheets
         if GOOGLE_SHEETS_ENABLED:
             log_user_to_google_sheets(message.chat.id, date_registered, username)
@@ -579,10 +650,22 @@ def my_orders(message):
         send_rate_limited_message(message.chat.id)
         return
     try:
+        # Параметры пагинации: page (1..), status фильтр (опц.)
+        # Предлагаем управлять через команды: /my_orders <page> [status]
+        page = 1
+        status_filter = None
+        # Если последнее сообщение формата "+Ещё" придёт callback — можно расширить позже
         with engine.connect() as conn:
+            params = {"user_id": message.chat.id}
+            where = "WHERE user_id = :user_id"
+            if status_filter:
+                where += " AND status = :status"
+                params["status"] = status_filter
+            limit = 10
+            offset = (page - 1) * limit
             result = conn.execute(sql_text(
-                "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
-            ), {"user_id": message.chat.id})
+                f"SELECT id, item, quantity, price, total, date, status FROM merch_orders {where} ORDER BY id DESC LIMIT :limit OFFSET :offset"
+            ), {**params, "limit": limit, "offset": offset})
             rows = result.fetchall()
         if not rows:
             bot.send_message(message.chat.id, "У вас нет заказов.")
@@ -592,14 +675,48 @@ def my_orders(message):
         for row in rows:
             oid, item, qty, price, total, date_str, status = row
             text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
-        bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
-        # Кнопка для возврата в личный кабинет
-        kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        kb.add("👤 Личный кабинет")
-        bot.send_message(message.chat.id, "Нажмите 'Личный кабинет' для возврата", reply_markup=kb)
+        # Кнопки пагинации (примитив, всегда показываем 'Ещё')
+        ikb = types.InlineKeyboardMarkup()
+        ikb.add(types.InlineKeyboardButton("▶️ Ещё", callback_data="user_orders_more:2"))
+        bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines), reply_markup=ikb)
     except Exception as e:
         logger.error(f"Ошибка получения заказов: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при получении ваших заказов. Попробуйте позже.")
+
+# Пагинация для заказов пользователя (inline)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("user_orders_more:"))
+def user_orders_more(call: types.CallbackQuery):
+    page_str = call.data.split(":", 1)[1]
+    try:
+        page = int(page_str)
+        if page < 1:
+            page = 1
+    except:
+        page = 1
+    user_id = call.from_user.id
+    try:
+        with engine.connect() as conn:
+            limit = 10
+            offset = (page - 1) * limit
+            result = conn.execute(sql_text(
+                "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC LIMIT :limit OFFSET :offset"
+            ), {"user_id": user_id, "limit": limit, "offset": offset})
+            rows = result.fetchall()
+        if not rows:
+            bot.answer_callback_query(call.id, "Больше заказов нет")
+            return
+        text_lines = []
+        for row in rows:
+            oid, item, qty, price, total, date_str, status = row
+            text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
+        next_page = page + 1
+        ikb = types.InlineKeyboardMarkup()
+        ikb.add(types.InlineKeyboardButton("▶️ Ещё", callback_data=f"user_orders_more:{next_page}"))
+        bot.send_message(user_id, "Ещё заказы:\n" + "\n".join(text_lines), reply_markup=ikb)
+        bot.answer_callback_query(call.id)
+    except Exception as e:
+        logger.error(f"Ошибка пагинации заказов пользователя: {e}")
+        bot.answer_callback_query(call.id, "Ошибка")
 # Добавляем обработчик для истории покупок
 @bot.message_handler(func=lambda m: m.text == "📜 История покупок")
 def purchase_history(message):
@@ -1032,31 +1149,7 @@ def back_to_merch(message):
         send_rate_limited_message(message.chat.id)
         return
     merch_menu(message)
-# --- Мои заказы (пользователь) ---
-@bot.message_handler(func=lambda m: m.text == "📦 Мои заказы")
-def my_orders(message):
-    if not allowed_action(message.chat.id, "my_orders"):
-        send_rate_limited_message(message.chat.id)
-        return
-    try:
-        with engine.connect() as conn:
-            result = conn.execute(sql_text(
-                "SELECT id, item, quantity, price, total, date, status FROM merch_orders WHERE user_id = :user_id ORDER BY id DESC"
-            ), {"user_id": message.chat.id})
-            rows = result.fetchall()
-        if not rows:
-            bot.send_message(message.chat.id, "У вас нет заказов.")
-            merch_menu(message)
-            return
-        text_lines = []
-        for row in rows:
-            oid, item, qty, price, total, date_str, status = row
-            text_lines.append(f"#{oid} — {item} ×{qty} ({price}₽/шт) = {total}₽ | {status} | {date_str}")
-        bot.send_message(message.chat.id, "Ваши заказы:\n" + "\n".join(text_lines))
-        merch_menu(message)
-    except Exception as e:
-        logger.error(f"Ошибка получения заказов: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении ваших заказов. Попробуйте позже.")
+# (Удален дублирующийся обработчик '📦 Мои заказы')
 # --- Админ-панель (inline) и команды владельца ---
 @bot.message_handler(commands=['admin'])
 def admin_command(message):
@@ -1134,27 +1227,48 @@ def callback_query_handler(call: types.CallbackQuery):
         bot.register_next_step_handler(msg, prepare_broadcast)
         return
     # ИСПРАВЛЕНО: Обновлен запрос к заказам, учитывающий структуру таблицы
-    if data == "admin_orders" and user_id == OWNER_ID:
+    if data.startswith("admin_orders") and user_id == OWNER_ID:
         bot.answer_callback_query(call.id)
         try:
+            # Параметры: admin_orders[:status][:page]
+            parts = data.split(":")
+            status_filter = parts[1] if len(parts) > 1 and parts[1] else None
+            page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
             with engine.connect() as conn:
-                # ИСПРАВЛЕНО: Добавлено условие WHERE status != 'Доставлен', чтобы скрыть доставленные заказы
+                where = "WHERE 1=1"
+                params = {}
+                if status_filter and status_filter != "all":
+                    where += " AND status = :status"
+                    params["status"] = status_filter
+                limit = 10
+                offset = (page - 1) * limit
                 result = conn.execute(sql_text(
-                    "SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders WHERE status != 'Доставлен' ORDER BY id DESC LIMIT 50"
-                ))
+                    f"SELECT id, user_id, username, item, quantity, price, total, date, status FROM merch_orders {where} ORDER BY id DESC LIMIT :limit OFFSET :offset"
+                ), {**params, "limit": limit, "offset": offset})
                 rows = result.fetchall()
             if not rows:
                 bot.send_message(OWNER_ID, "Заказов нет.")
                 return
             # Для компактности покажем кнопки-переключатели на отдельные заказы
             ikb = types.InlineKeyboardMarkup(row_width=1)
+            # Фильтры по статусам
+            filter_row = [
+                types.InlineKeyboardButton("Все", callback_data="admin_orders:all:1"),
+                types.InlineKeyboardButton("В обработке", callback_data="admin_orders:В обработке:1"),
+                types.InlineKeyboardButton("Отправлен", callback_data="admin_orders:Отправлен:1"),
+                types.InlineKeyboardButton("Доставлен", callback_data="admin_orders:Доставлен:1"),
+                types.InlineKeyboardButton("Отклонён", callback_data="admin_orders:Отклонён:1"),
+            ]
+            ikb.row(*filter_row)
             for row in rows:
                 oid, uid, username, item, qty, price, total, date_str, status = row
                 # Добавлено поле price в отображение
                 label = f"#{oid} | {username or f'ID:{uid}'} | {item}×{qty} | {price}₽ | {total}₽ | {status}"
                 ikb.add(types.InlineKeyboardButton(label, callback_data=f"open_order:{oid}"))
+            next_page = page + 1
+            ikb.add(types.InlineKeyboardButton("▶️ Ещё", callback_data=f"admin_orders:{status_filter or 'all'}:{next_page}"))
             ikb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="admin_back"))
-            bot.send_message(OWNER_ID, "Последние заказы (нажмите для управления):", reply_markup=ikb)
+            bot.send_message(OWNER_ID, f"Заказы (стр. {page}) — фильтр: {status_filter or 'Все'}", reply_markup=ikb)
         except Exception as e:
             logger.error(f"Ошибка получения заказов: {e}")
             bot.send_message(OWNER_ID, "Ошибка при получении списка заказов.")
@@ -1323,14 +1437,29 @@ def callback_query_handler(call: types.CallbackQuery):
 # --- ИСПРАВЛЕНО: Добавлено подтверждение для рассылки ---
 def prepare_broadcast(message):
     """Подготовка рассылки - запрос подтверждения"""
+    # Разрешаем только владельцу инициировать рассылку
+    if message.chat.id != OWNER_ID:
+        return
     if message.text is None:
         bot.send_message(OWNER_ID, "Ошибка: сообщение не содержит текста.")
         return
     broadcast_text = message.text
+    # Сохраняем текст в БД и используем ID в callback_data (безопасно и короче)
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(sql_text(
+                "INSERT INTO broadcasts (text, created_at) VALUES (:text, :created_at) RETURNING id"
+            ), {"text": broadcast_text, "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+            b_id = result.fetchone()[0]
+            conn.commit()
+    except Exception as e:
+        logger.error(f"Ошибка сохранения текста рассылки: {e}")
+        bot.send_message(OWNER_ID, "Не удалось подготовить рассылку.")
+        return
     # Создаем клавиатуру подтверждения
     ikb = types.InlineKeyboardMarkup()
     ikb.add(
-        types.InlineKeyboardButton("✅ Отправить", callback_data=f"confirm_broadcast:{broadcast_text}"),
+        types.InlineKeyboardButton("✅ Отправить", callback_data=f"confirm_broadcast:{b_id}"),
         types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_broadcast")
     )
     # Отправляем сообщение с подтверждением
@@ -1369,8 +1498,23 @@ def handle_confirm_broadcast(call):
     if call.from_user.id != OWNER_ID:
         bot.answer_callback_query(call.id, "Вы не являетесь владельцем бота!")
         return
-    # Извлекаем текст рассылки из callback_data
-    broadcast_text = call.data.split(":", 1)[1]
+    # Извлекаем ID рассылки из callback_data и подтягиваем текст из БД
+    try:
+        b_id = int(call.data.split(":", 1)[1])
+    except Exception:
+        bot.answer_callback_query(call.id, "Некорректные данные.")
+        return
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(sql_text("SELECT text FROM broadcasts WHERE id = :id"), {"id": b_id})
+            row = result.fetchone()
+    except Exception as e:
+        logger.error(f"Ошибка получения текста рассылки: {e}")
+        row = None
+    if not row:
+        bot.answer_callback_query(call.id, "Черновик рассылки не найден.")
+        return
+    broadcast_text = row[0]
     # Отправляем сообщение о начале рассылки
     bot.answer_callback_query(call.id, "Начинаем рассылку...")
     # Удаляем сообщение с подтверждением
@@ -1398,8 +1542,17 @@ def handle_cancel_broadcast(call):
 @app.route("/")
 def index():
     return "Bot is running!"
+
+@app.route("/ping")
+def ping():
+    return "pong", 200
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
+    # Проверка секретного токена вебхука (если задан)
+    if WEBHOOK_SECRET:
+        header_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+        if header_token != WEBHOOK_SECRET:
+            return "", 403
     update = types.Update.de_json(request.get_json(force=True))
     bot.process_new_updates([update])
     return "", 200
